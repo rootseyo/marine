@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bright Networks - AI Commerce Solution</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; word-break: keep-all; overflow-wrap: break-word; margin: 0; padding: 20px; }
+        .hero-card { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); max-width: 480px; width: 100%; text-align: center; }
+        .logo { font-size: 2.2rem; font-weight: 800; color: #2c3e50; margin-bottom: 20px; letter-spacing: -1px; }
+        .logo span { color: #3498db; }
+        .btn-google { background: white; border: 1px solid #ddd; color: #333; padding: 14px 20px; border-radius: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 12px; transition: all 0.3s; text-decoration: none; font-size: 1rem; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .btn-google:hover { background: #f8f9fa; box-shadow: 0 4px 12px rgba(0,0,0,0.1); transform: translateY(-2px); color: #333; }
+        .feature-list { text-align: left; margin: 30px 0; color: #555; font-size: 0.95rem; background: #f8f9fa; padding: 20px; border-radius: 15px; }
+        .feature-list li { margin-bottom: 12px; display: flex; align-items: flex-start; line-height: 1.5; }
+        .feature-list li:last-child { margin-bottom: 0; }
+        .feature-list i { margin-top: 4px; flex-shrink: 0; }
+        .highlight { color: #e74c3c; font-weight: bold; }
+        
+        @media (max-width: 576px) {
+            .hero-card { padding: 30px 20px; }
+            .logo { font-size: 1.8rem; }
+            h4 { font-size: 1.3rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="hero-card">
+        <div class="logo"><i class="fas fa-lightbulb"></i> Bright<span>Networks</span></div>
+        <h4 class="mb-3">쇼핑몰 매출의 1분의 기적</h4>
+        <p class="text-muted">복잡한 SEO, 이탈 방지 마케팅.<br>AI가 단 한 줄의 코드로 해결해 드립니다.</p>
+        
+        <ul class="list-unstyled feature-list">
+            <li><i class="fas fa-check text-success me-2"></i> <strong>AI SEO 자동화</strong>: 구글 검색 노출 최적화</li>
+            <li><i class="fas fa-check text-success me-2"></i> <strong>이탈 감지</strong>: 구매 포기 고객 방어</li>
+            <li><i class="fas fa-check text-success me-2"></i> <strong>초간편 설치</strong>: 개발자 없이 1분 컷</li>
+        </ul>
+
+        <a href="/api/auth/google" class="btn-google w-100">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="20" alt="Google">
+            Google 계정으로 3초 만에 시작하기
+        </a>
+        <p class="mt-3 text-muted" style="font-size: 0.8rem;">무료 체험 기간 중 카드 등록 없음</p>
+    </div>
+</body>
+</html>

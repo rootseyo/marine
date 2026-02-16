@@ -1,0 +1,31 @@
+{
+  "name": "shopping-mall-ldjson-generator",
+  "version": "1.0.0",
+  "description": "Scrapes shopping mall URLs and generates LD+JSON using Gemini 1.5 Flash",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "debug": "node --inspect server.js",
+    "install:browsers": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "@google/genai": "^1.39.0",
+    "@google/generative-ai": "^0.21.0",
+    "body-parser": "^1.20.2",
+    "connect-pg-simple": "^10.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
+    "express": "^4.18.2",
+    "express-session": "^1.19.0",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "pg": "^8.18.0",
+    "playwright": "^1.41.0",
+    "resend": "^6.9.1",
+    "turndown": "^7.2.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}

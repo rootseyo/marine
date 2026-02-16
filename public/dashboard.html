@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Bright Networks</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { background-color: #f8f9fa; word-break: keep-all; overflow-wrap: break-word; transition: all 0.3s ease; }
+        .sidebar { height: 100vh; background: #2c3e50; color: white; padding-top: 20px; position: fixed; width: 250px; display: flex; flex-direction: column; transition: all 0.3s ease; z-index: 1000; overflow: hidden; box-shadow: 4px 0 10px rgba(0,0,0,0.1); }
+        .sidebar.collapsed { width: 70px; }
+        .sidebar .nav-link { color: rgba(255,255,255,0.7); padding: 15px 22px; font-size: 1rem; display: flex; align-items: center; white-space: nowrap; transition: all 0.2s; border-left: 4px solid transparent; }
+        .sidebar .nav-link i { min-width: 25px; font-size: 1.2rem; margin-right: 15px; text-align: center; }
+        .sidebar.collapsed .nav-link span { display: none; }
+        .sidebar.collapsed .nav-link i { margin-right: 0; }
+        .sidebar.collapsed .logo span, .sidebar.collapsed .logo br { display: none; }
+        .sidebar.collapsed .logo { text-align: center; padding: 0 0 30px; }
+        .sidebar.collapsed .logo i { margin-right: 0; font-size: 1.8rem; }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active { color: white; background: rgba(255,255,255,0.1); border-left-color: #3498db; }
+        
+        .sidebar .logo { font-size: 1.5rem; font-weight: bold; padding: 0 20px 30px; flex-shrink: 0; transition: all 0.3s; line-height: 1.2; }
+        
+        .toggle-btn { position: absolute; top: 20px; right: 15px; background: rgba(255,255,255,0.1); color: white; border: none; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; z-index: 1001; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .toggle-btn:hover { background: rgba(255,255,255,0.2); }
+        .sidebar.collapsed .toggle-btn { right: 19px; top: 75px; }
+
+        .main-content { margin-left: 250px; padding: 30px; transition: all 0.3s ease; }
+        .main-content.expanded { margin-left: 70px; }
+        
+        /* User info in sidebar */
+        .user-section { margin-top: auto; padding: 20px 10px; border-top: 1px solid rgba(255,255,255,0.1); transition: all 0.3s; }
+        .user-info-wrapper { display: flex; align-items: center; padding: 5px 10px; margin-bottom: 15px; overflow: hidden; }
+        .sidebar.collapsed .user-info-wrapper span { display: none; }
+        .sidebar.collapsed .user-info-wrapper img { margin-right: 0 !important; }
+
+        .card { border: none; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .step-number { background: #3498db; color: white; width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-right: 10px; font-weight: bold; }
+        .code-block { background: #1e1e1e !important; border-radius: 8px; position: relative; overflow: hidden; border: 1px solid #333; }
+        .code-block pre { padding: 20px; margin: 0; font-size: 0.9rem; line-height: 1.5; overflow-x: auto; color: #d4d4d4; }
+        .code-block code { font-family: 'Fira Code', 'Consolas', monospace !important; background: transparent !important; padding: 0 !important; color: #4ec9b0 !important; }
+        .copy-btn { position: absolute; top: 12px; right: 12px; background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; z-index: 10; transition: all 0.2s; }
+        .copy-btn:hover { background: rgba(255,255,255,0.15); color: white; border-color: rgba(255,255,255,0.3); }
+        .score-container { position: relative; height: 200px; width: 200px; margin: 0 auto; }
+        .score-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 2.5rem; font-weight: bold; color: #2ecc71; }
+        .loader { display: none; text-align: center; padding: 40px; }
+        .hidden { display: none; }
+        .advice-card { border-left: 4px solid #3498db; padding-left: 15px; margin-bottom: 15px; }
+        .advice-title { font-weight: bold; color: #2c3e50; margin-bottom: 5px; }
+        .advice-text { font-size: 0.95rem; color: #555; }
+
+        /* New Styles */
+        .metric-card { border: none; border-radius: 15px; transition: transform 0.2s; }
+        .metric-card:hover { transform: translateY(-5px); }
+        .metric-value { font-size: 1.8rem; font-weight: 800; color: #2c3e50; }
+        .metric-label { font-size: 0.85rem; color: #7f8c8d; text-transform: uppercase; letter-spacing: 1px; }
+        
+        .timeline { position: relative; padding-left: 30px; }
+        .timeline-item { position: relative; padding-bottom: 20px; }
+        .timeline-item::before { content: ""; position: absolute; left: -21px; top: 5px; width: 12px; height: 12px; border-radius: 50%; background: #3498db; }
+        .timeline-item::after { content: ""; position: absolute; left: -16px; top: 20px; width: 2px; height: 100%; background: #e9ecef; }
+        .timeline-item:last-child::after { display: none; }
+        
+        .pricing-card { border: 2px solid #f1f3f5; border-radius: 20px; transition: all 0.3s; position: relative; }
+        .pricing-card.featured { border-color: #3498db; }
+        .recommended-badge { position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: #3498db; color: white; padding: 2px 15px; border-radius: 20px; font-size: 0.7rem; font-weight: bold; z-index: 10; }
+        .price-text { font-size: 1.75rem; font-weight: bold; }
+        
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #dee2e6; transition: .4s; border-radius: 24px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05); }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 5px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        input:checked + .slider { background-color: #3498db; }
+        input:checked + .slider:before { transform: translateX(17px); }
+
+        .preview-box { background: #fff; border: 1px dashed #dee2e6; border-radius: 10px; padding: 20px; position: relative; }
+        .social-proof-toast { position: absolute; bottom: 20px; left: 20px; background: white; border-radius: 50px; padding: 10px 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); display: flex; align-items: center; font-size: 0.85rem; border: 1px solid #eee; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <button class="toggle-btn" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
+        <div class="logo">
+            Bright<br>
+            <span>Networks</span>
+        </div>
+        <nav class="nav flex-column flex-grow-1" id="mainNav">
+            <a class="nav-link" href="/dashboard"><i class="fas fa-tachometer-alt"></i> <span>대시보드</span></a>
+            <a class="nav-link" href="/automation"><i class="fas fa-robot"></i> <span>자동화 설정</span></a>
+            <a class="nav-link" href="/reports"><i class="fas fa-chart-line"></i> <span>분석 리포트</span></a>
+            <a class="nav-link" href="/organizations"><i class="fas fa-building"></i> <span>내 조직</span></a>
+            <a class="nav-link" href="/subscription"><i class="fas fa-credit-card"></i> <span>요금제 관리</span></a>
+            
+            <div class="user-section">
+                <div class="user-info-wrapper">
+                    <img id="userAvatar" src="" class="rounded-circle me-2" width="30">
+                    <span id="userName" class="small">Loading...</span>
+                </div>
+                <a href="/api/auth/logout" class="btn btn-outline-light btn-sm w-100 mt-2">
+                    <i class="fas fa-sign-out-alt"></i> <span>로그아웃</span>
+                </a>
+            </div>
+        </nav>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content" id="mainContent">
+        <h2 class="mb-4">반갑습니다, <span id="welcomeName">회원</span>님! 👋</h2>
+        
+        <!-- Section: Dashboard (Overview) -->
+        <div id="sectionDashboard" class="content-section hidden">
+            <div class="row g-4 mb-4">
+                <div class="col-md-3">
+                    <div class="card metric-card bg-white shadow-sm">
+                        <div class="card-body">
+                            <div class="metric-label">방어된 잠재 매출</div>
+                            <div class="metric-value">₩<span id="statRecovered">1,240,000</span></div>
+                            <div class="text-success small"><i class="fas fa-arrow-up"></i> 12% vs 지난주</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card metric-card bg-white shadow-sm">
+                        <div class="card-body">
+                            <div class="metric-label">오늘의 이탈 방지</div>
+                            <div class="metric-value"><span id="statPrevention">42</span>회</div>
+                            <div class="text-primary small">AI 팝업 활성 중</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card metric-card bg-white shadow-sm">
+                        <div class="card-body">
+                            <div class="metric-label">현재 접속자 수</div>
+                            <div class="metric-value"><span id="statVisitors">128</span>명</div>
+                            <div class="text-muted small">실시간 트래픽</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card metric-card bg-white shadow-sm">
+                        <div class="card-body">
+                            <div class="metric-label">SEO 점수</div>
+                            <div class="metric-value"><span id="statSeo">88</span>/100</div>
+                            <div class="progress mt-2" style="height: 6px;">
+                                <div class="progress-bar bg-success" style="width: 88%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title fw-bold mb-4">매출 방어 추이</h5>
+                            <div style="height: 300px; position: relative;">
+                                <canvas id="revenueChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h5 class="card-title fw-bold mb-4">실시간 이벤트 로그</h5>
+                            <div class="timeline" id="eventLog">
+                                <div class="timeline-item">
+                                    <div class="fw-bold small text-muted">14:20:05</div>
+                                    <div class="small">장바구니 이탈 감지 -> <strong>10% 할인 쿠폰</strong> 발행</div>
+                                </div>
+                                <div class="timeline-item">
+                                    <div class="fw-bold small text-muted">14:15:30</div>
+                                    <div class="small">서울시 서초구 고객님이 <strong>린넨 셔츠</strong>를 구매했습니다. (Social Proof)</div>
+                                </div>
+                                <div class="timeline-item">
+                                    <div class="fw-bold small text-muted">13:58:12</div>
+                                    <div class="small">결제 페이지 이탈 방지 팝업 노출</div>
+                                </div>
+                                <div class="timeline-item">
+                                    <div class="fw-bold small text-muted">13:45:00</div>
+                                    <div class="small">AIO 검색 최적화 데이터 업데이트 완료</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mt-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h5 class="card-title fw-bold">사이트 최적화 내역</h5>
+                            <p class="text-muted mb-0">AI가 분석한 최근 스캔 결과입니다.</p>
+                        </div>
+                        <button class="btn btn-outline-primary btn-sm" onclick="batchRunAll()">
+                            <i class="fas fa-redo me-1"></i> 재분석
+                        </button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>사이트 URL</th>
+                                    <th>상태</th>
+                                    <th>SEO 점수</th>
+                                    <th>마지막 스캔</th>
+                                    <th>액션</th>
+                                </tr>
+                            </thead>
+                            <tbody id="siteHistoryList">
+                                <tr><td colspan="5" class="text-center py-4">데이터를 불러오는 중...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section: Automation Control -->
+        <div id="sectionAutomation" class="content-section hidden">
+            <div class="row">
+                <!-- 1. Social Proof -->
+                <div class="col-md-6">
+                    <div class="card mb-4 h-100">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-users text-primary me-2"></i> 실시간 구매 알림</h5>
+                                    <p class="text-muted small">다른 고객의 구매 소식을 실시간으로 알려 신뢰도를 높입니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="toggleSocialProof">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">알림 문구 템플릿</label>
+                                <input type="text" class="form-control" id="socialProofText" value="{location} {customer}님이 {product}를 방금 구매했습니다!">
+                                <div class="form-text">사용 가능한 태그: {location}, {customer}, {product}, {time}</div>
+                            </div>
+
+                            <div class="preview-box mt-auto" style="height: 100px; background-color: #f8f9fa;">
+                                <div class="social-proof-toast" style="bottom: 10px; left: 10px;">
+                                    <div style="width: 10px; height: 10px; background: #2ecc71; border-radius: 50%; margin-right: 12px;"></div>
+                                    <span><strong>서울시</strong> <strong>김*연</strong>님이 <strong>린넨 셔츠</strong>를 방금 구매했습니다!</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Exit Intent -->
+                <div class="col-md-6">
+                    <div class="card mb-4 h-100">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-door-open text-danger me-2"></i> 이탈 방지 AI 팝업</h5>
+                                    <p class="text-muted small">고객이 나가려는 순간(Mouse Leave)을 포착해 붙잡습니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="toggleExitIntent">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">이탈 방지 문구</label>
+                                <textarea class="form-control" id="exitIntentEditor" rows="3">잠시만요! 🏃‍♂️ 지금 나가시기엔 너무 아쉬운 혜택이 있어요.</textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Tab Recovery (New) -->
+                <div class="col-md-6">
+                    <div class="card mb-4 h-100">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-exchange-alt text-warning me-2"></i> 탭 복구 (Tab Recovery)</h5>
+                                    <p class="text-muted small">고객이 다른 탭으로 이동하면 제목을 깜빡여 다시 부릅니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="toggleTabRecovery">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">깜빡임 문구</label>
+                                <input type="text" class="form-control" id="tabRecoveryText" value="🎁 놓치지 마세요!">
+                                <div class="form-text">원래 제목과 이 문구가 번갈아가며 표시됩니다.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Price Match (New) -->
+                <div class="col-md-6">
+                    <div class="card mb-4 h-100">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-tags text-success me-2"></i> 가격 비교 방어</h5>
+                                    <p class="text-muted small">상품명을 복사(Ctrl+C)하면 즉시 할인 혜택을 제안합니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="togglePriceMatch">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">제안 문구</label>
+                                <input type="text" class="form-control" id="priceMatchText" value="🔎 최저가를 찾고 계신가요? 여기서 5% 할인받으세요: SAVE5">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="text-end mt-3">
+                <button class="btn btn-primary px-4" onclick="saveAutomation()">
+                    <i class="fas fa-save me-2"></i> 모든 설정 저장
+                </button>
+            </div>
+        </div>
+
+        <!-- Section: Subscription -->
+        <div id="sectionSubscription" class="content-section hidden">
+            <div class="text-center mb-5">
+                <h2 class="fw-bold">합리적인 요금제로 비즈니스를 키우세요</h2>
+                <p class="text-muted">현재 플랜: <span class="badge bg-primary">Free</span></p>
+            </div>
+
+            <div class="row g-3 justify-content-center mb-5">
+                <!-- Free Plan -->
+                <div class="col-xl-3 col-md-4">
+                    <div class="card pricing-card h-100 p-3">
+                        <div class="card-body text-center p-2 d-flex flex-column">
+                            <h5 class="fw-bold">Free</h5>
+                            <div class="price-text my-3">₩0<span class="fs-6 text-muted">/월</span></div>
+                            <ul class="list-unstyled text-start mb-4 small flex-grow-1">
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 기초 SEO 진단 (월 1회)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 주요 검색 엔진 색인 가이드</li>
+                                <li class="mb-2 text-muted"><i class="fas fa-times me-2"></i> AI 이탈 방지 팝업</li>
+                                <li class="mb-2 text-muted"><i class="fas fa-times me-2"></i> 실시간 구매 알림 위젯</li>
+                            </ul>
+                            <button class="btn btn-outline-dark btn-sm w-100 disabled">현재 사용 중</button>
+                        </div>
+                    </div>
+                </div>
+                <!-- Starter Plan -->
+                <div class="col-xl-3 col-md-4">
+                    <div class="card pricing-card featured h-100 p-3 shadow-sm border-primary">
+                        <div class="recommended-badge">RECOMMENDED</div>
+                        <div class="card-body text-center p-2 d-flex flex-column">
+                            <h5 class="fw-bold">Starter</h5>
+                            <div class="price-text my-3">₩99,000<span class="fs-6 text-muted">/월</span></div>
+                            <ul class="list-unstyled text-start mb-4 small flex-grow-1">
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> SEO 정밀 분석 (<b>일 30회</b>)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> AI 이탈 방지 (월 5,000회)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 실시간 구매 알림 위젯</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 검색 엔진 색인 현황 모니터링</li>
+                            </ul>
+                            <button class="btn btn-primary btn-sm w-100" onclick="alert('결제 페이지로 이동합니다.')">업그레이드</button>
+                        </div>
+                    </div>
+                </div>
+                <!-- Pro Plan -->
+                <div class="col-xl-3 col-md-4">
+                    <div class="card pricing-card h-100 p-3">
+                        <div class="card-body text-center p-2 d-flex flex-column">
+                            <h5 class="fw-bold">Pro</h5>
+                            <div class="price-text my-3">₩190,000<span class="fs-6 text-muted">/월</span></div>
+                            <ul class="list-unstyled text-start mb-4 small flex-grow-1">
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> SEO 정밀 분석 (<b>일 50회</b>)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> AI 이탈 방지 (무제한 호출)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 커스텀 마케팅 시나리오 설정</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 주간 AI 성과 리포트 (PDF)</li>
+                            </ul>
+                            <button class="btn btn-outline-primary btn-sm w-100" onclick="alert('결제 페이지로 이동합니다.')">업그레이드</button>
+                        </div>
+                    </div>
+                </div>
+                <!-- Custom Plan -->
+                <div class="col-xl-3 col-md-4">
+                    <div class="card pricing-card h-100 p-3 border-info">
+                        <div class="card-body text-center p-2 d-flex flex-column">
+                            <h5 class="fw-bold text-info">Custom</h5>
+                            <div class="price-text my-3">별도 문의</div>
+                            <ul class="list-unstyled text-start mb-4 small flex-grow-1">
+                                <li class="mb-2"><i class="fas fa-check text-info me-2"></i> 대형 쇼핑몰 맞춤 솔루션</li>
+                                <li class="mb-2"><i class="fas fa-check text-info me-2"></i> 전담 계정 관리자 배정</li>
+                                <li class="mb-2"><i class="fas fa-check text-info me-2"></i> 서버 독립형 API 제공</li>
+                                <li class="mb-2"><i class="fas fa-check text-info me-2"></i> 24/7 엔지니어링 서포트</li>
+                            </ul>
+                            <a href="#customContactForm" class="btn btn-info btn-sm w-100 text-white">문의하기</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Custom Plan Contact Form -->
+            <div id="customContactForm" class="card mx-auto shadow-sm" style="max-width: 700px; border-top: 5px solid #0dcaf0;">
+                <div class="card-body p-4">
+                    <h5 class="fw-bold mb-4 text-center">Custom 요금제 도입 문의</h5>
+                    <form onsubmit="event.preventDefault(); alert('문의가 접수되었습니다. 담당자가 곧 연락드리겠습니다.');">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">성함</label>
+                                <input type="text" class="form-control" placeholder="홍길동" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">연락처</label>
+                                <input type="tel" class="form-control" placeholder="010-1234-5678" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small fw-bold">이메일 주소</label>
+                                <input type="email" class="form-control" placeholder="example@company.com" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small fw-bold">문의 내용</label>
+                                <textarea class="form-control" rows="4" placeholder="쇼핑몰 규모, 필요한 기능 등 문의 내용을 적어주세요." required></textarea>
+                            </div>
+                            <div class="col-12 text-center mt-4">
+                                <button type="submit" class="btn btn-info text-white px-5 py-2 fw-bold">문의 내용 보내기</button>
+                                <p class="text-muted small mt-2">영업일 기준 24시간 이내에 답변 드립니다.</p>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section: My Organization -->
+        <div id="sectionOrg" class="content-section hidden">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">내 조직관리</h5>
+                    
+                    <div class="row align-items-end mb-4">
+                        <div class="col-md-6">
+                            <label class="form-label">활성 조직 선택</label>
+                            <select id="orgSelect" class="form-select">
+                                <option value="" selected>조직을 선택하세요...</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="input-group mt-3 mt-md-0">
+                                <input type="text" id="newOrgName" class="form-control" placeholder="새 조직 이름 (예: 브라이트 캔들)">
+                                <button class="btn btn-outline-primary" onclick="createOrg()">+ 신규 생성</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="activeOrgStatus" class="mt-3 alert alert-info py-2 hidden">
+                        현재 <strong id="activeOrgName"></strong> 조직이 선택되었습니다.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Installation Script -->
+            <div id="orgScriptSection" class="card mt-4 hidden">
+                <div class="card-body">
+                    <h5 class="card-title fw-bold text-success"><i class="fas fa-code me-2"></i> SDK 설치 스크립트</h5>
+                    <p class="text-muted small">선택한 조직의 사이트에서 AI 기능을 활성화하려면 아래 코드를 &lt;head&gt; 섹션에 삽입하세요.</p>
+                    <div id="orgScriptList">
+                        <!-- Script items will be injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Team Management -->
+            <div class="card mt-4 border-primary">
+                <div class="card-body">
+                    <h5 class="card-title text-primary"><i class="fas fa-users me-2"></i> 팀 관리 및 초대</h5>
+                    <p class="text-muted">함께 분석 보고서를 관리할 팀원을 초대하세요.</p>
+                    
+                    <div class="row mb-4">
+                        <div class="col-md-8">
+                            <div class="input-group">
+                                <input type="email" id="inviteEmail" class="form-control" placeholder="초대할 팀원 이메일 (예: team@example.com)">
+                                <select id="inviteRole" class="form-select" style="max-width: 150px;">
+                                    <option value="member">멤버</option>
+                                    <option value="admin">관리자</option>
+                                </select>
+                                <button class="btn btn-primary" onclick="inviteMember()">초대 메일 발송</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h6 class="fw-bold mb-3">현재 팀원 목록</h6>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>이름</th>
+                                    <th>이메일</th>
+                                    <th>역할</th>
+                                    <th>합류일</th>
+                                </tr>
+                            </thead>
+                            <tbody id="memberList">
+                                <tr><td colspan="4" class="text-center py-3">조직을 선택하면 팀원 목록이 표시됩니다.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recycle Bin (Moved to bottom and made collapsible) -->
+            <div class="card mt-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center cursor-pointer" onclick="toggleTrash()" style="cursor: pointer;">
+                        <h5 class="card-title text-danger mb-0"><i class="fas fa-trash-alt me-2"></i> 휴지통 (삭제된 내역)</h5>
+                        <button class="btn btn-sm btn-outline-secondary" id="btnToggleTrash">더 보기 <i class="fas fa-chevron-down ms-1"></i></button>
+                    </div>
+                    
+                    <div id="trashContainer" class="hidden mt-3">
+                        <p class="text-muted small">삭제된 분석 내역을 확인하고 복구할 수 있습니다.</p>
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>사이트 URL</th>
+                                        <th>삭제 일시</th>
+                                        <th>액션</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="trashList">
+                                    <tr><td colspan="3" class="text-center py-3">휴지통이 비어 있습니다.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section: Analysis Report (Scan) -->
+        <div id="sectionReport" class="content-section hidden">
+            <div class="card" id="step2Card">
+                <div class="card-body">
+                    <h5 class="card-title mb-4">사이트 연결 및 AI 스캔</h5>
+                    
+                    <!-- Analysis Method Tabs -->
+                    <ul class="nav nav-pills mb-3" id="scanTabs" role="tablist">
+                        <li class="nav-item">
+                            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tabDirect" type="button">URL 직접 입력</button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tabSitemap" type="button">Sitemap 분석</button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content mt-4">
+                        <!-- Direct URL Tab -->
+                        <div class="tab-pane fade show active" id="tabDirect">
+                            <div class="input-group mb-3">
+                                <span class="input-group-text">https://</span>
+                                <input type="text" id="siteUrl" class="form-control" placeholder="www.example.com">
+                                <button class="btn btn-primary px-4" onclick="registerSite()">
+                                    <i class="fas fa-magic me-2"></i> AI 분석 시작
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Sitemap Tab -->
+                        <div class="tab-pane fade" id="tabSitemap">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <p class="text-muted small mb-0">쇼핑몰의 sitemap.xml 주소를 입력하면 모든 페이지를 한 번에 분석할 수 있습니다.</p>
+                                <div class="badge bg-light text-dark border p-2">
+                                    남은 분석 횟수: <span id="remainingCount" class="fw-bold text-primary">--</span> / 1000
+                                </div>
+                            </div>
+                            <div class="input-group mb-3">
+                                <span class="input-group-text">https://</span>
+                                <input type="text" id="sitemapUrl" class="form-control" placeholder="www.example.com/sitemap.xml">
+                                <button class="btn btn-success px-4" onclick="parseSitemap()">
+                                    <i class="fas fa-list-ul me-2"></i> URL 추출하기
+                                </button>
+                            </div>
+                            <div id="sitemapResult" class="mt-3 hidden">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <h6 class="mb-0">추출된 URL (<span id="urlCount">0</span>개)</h6>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="batchAnalyzeSitemap()">선택 항목 일괄 분석</button>
+                                </div>
+                                <div class="list-group list-group-flush border rounded" id="sitemapUrlList" style="max-height: 200px; overflow-y: auto;">
+                                    <!-- URLs will be injected here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="scanLoader" class="loader">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <p class="mt-3"><strong>AI가 사이트를 분석 중입니다...</strong></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- New: Analysis History List -->
+            <div class="card mb-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="card-title fw-bold mb-0">최근 분석 리포트 목록</h5>
+                        <div class="input-group" style="max-width: 300px;">
+                            <span class="input-group-text bg-white border-end-0"><i class="fas fa-search text-muted"></i></span>
+                            <input type="text" id="historySearchInput" class="form-control border-start-0 shadow-none" placeholder="URL 검색..." onkeyup="filterHistoryTable()">
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle small">
+                            <thead class="table-light">
+                                <tr>
+                                    <th onclick="sortHistory('url')" style="cursor: pointer;">사이트 URL <i class="fas fa-sort ms-1"></i></th>
+                                    <th onclick="sortHistory('seo_score')" style="cursor: pointer;">SEO 점수 <i class="fas fa-sort ms-1"></i></th>
+                                    <th onclick="sortHistory('created_at')" style="cursor: pointer;">마지막 스캔 일시 <i class="fas fa-sort ms-1"></i></th>
+                                </tr>
+                            </thead>
+                            <tbody id="reportHistoryList" style="cursor: pointer;">
+                                <tr><td colspan="3" class="text-center py-3">데이터를 불러오는 중...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card hidden" id="step3Card">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <button class="btn btn-sm btn-outline-secondary" onclick="navigateTo('/reports')">
+                            <i class="fas fa-arrow-left me-1"></i> 목록으로 돌아가기
+                        </button>
+                        <span class="badge bg-success">AI 분석 리포트</span>
+                    </div>
+
+                    <div class="row mb-4">
+                        <div class="col-md-12 mb-3">
+                            <h4 class="fw-bold mb-1" id="analyzedUrlDisplay">https://www.example.com</h4>
+                            <p class="text-muted small">분석 대상 URL</p>
+                        </div>
+                        <div class="col-md-4 text-center border-end">
+                            <div class="text-muted mb-2">종합 SEO 점수</div>
+                            <div class="score-container">
+                                <canvas id="scoreChart"></canvas>
+                                <div class="score-text" id="seoScoreDisplay">--</div>
+                            </div>
+                        </div>
+                        <div class="col-md-8">
+                            <h6 class="fw-bold">AI 비즈니스 요약:</h6>
+                            <p id="siteSummary" class="text-muted italic">--</p>
+                            <h6 class="fw-bold mt-3">🔍 주요 발견 상품:</h6>
+                            <div id="detectedProducts" class="d-flex flex-wrap gap-2 mb-3"></div>
+                            <div id="ceoMessageContainer" class="alert alert-warning border-0 shadow-sm mt-3" style="display:none;">
+                                <h6 class="fw-bold"><i class="fas fa-search-plus me-2 text-primary"></i> AI 분석 의견</h6>
+                                <p id="ceoMessage" class="mb-0 italic" style="font-size: 0.95rem;"></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card mb-4 border-0 shadow-sm bg-light">
+                        <div class="card-body">
+                            <h6 class="fw-bold mb-3"><i class="fas fa-camera me-2"></i> 분석 시점 스크린샷</h6>
+                            <div class="text-center">
+                                <img id="siteScreenshot" src="" class="img-fluid rounded border shadow-sm" style="max-height: 400px; display: none;" alt="Site Screenshot">
+                                <div id="screenshotPlaceholder" class="py-5 text-muted bg-white rounded border">
+                                    <i class="fas fa-image fa-3x mb-2"></i><br>이미지 준비 중
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card mt-4 border-0 shadow-sm" id="aiInsightCard" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                        <div class="card-body">
+                            <h5 class="card-title text-white">AI 검색 엔진(AIO) 노출 지수</h5>
+                            <div class="row align-items-center">
+                                <div class="col-md-3 text-center">
+                                    <div style="font-size: 3rem; font-weight: bold;" id="aiScore">--</div>
+                                </div>
+                                <div class="col-md-9">
+                                    <div class="row text-center">
+                                        <div class="col-4"><i class="fas fa-comment-dots mb-1"></i><br><small id="chatgptStatus">--</small></div>
+                                        <div class="col-4"><i class="fas fa-search mb-1"></i><br><small id="perplexityStatus">--</small></div>
+                                        <div class="col-4"><i class="fas fa-star mb-1"></i><br><small id="geminiStatus">--</small></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-3 p-2 bg-white bg-opacity-10 rounded">
+                                <i class="fas fa-lightbulb me-2"></i> <span id="aiTip" style="font-size: 0.9rem;">--</span>
+                            </div>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="row" id="adviceContainer">
+                        <div class="col-md-6 advice-card"><div class="advice-title">🏷️ 메타 정보</div><div class="advice-text" id="adviceMeta">--</div></div>
+                        <div class="col-md-6 advice-card"><div class="advice-title">🏗️ 사이트 구조</div><div class="advice-text" id="adviceSemantics">--</div></div>
+                        <div class="col-md-6 advice-card"><div class="advice-title">🖼️ 이미지 최적화</div><div class="advice-text" id="adviceImages">--</div></div>
+                        <div class="col-md-6 advice-card"><div class="advice-title">🔗 연결성</div><div class="advice-text" id="adviceLinks">--</div></div>
+                        <div class="col-md-12 advice-card"><div class="advice-title">💎 구조화 데이터</div><div class="advice-text" id="adviceSchemas">--</div></div>
+                    </div>
+
+                    <div class="alert alert-success mt-4">
+                        <h6 class="fw-bold">연동 코드 (브라이트 네트워크 SDK)</h6>
+                        <p class="small text-muted mb-2">이 코드를 쇼핑몰의 &lt;head&gt; 섹션에 복사해 넣으세요.</p>
+                        <div class="code-block p-0">
+                            <button class="copy-btn" onclick="copyText('scriptTagCode')">Copy</button>
+                            <pre class="m-0"><code id="scriptTagCode" class="language-html"></code></pre>
+                        </div>
+                    </div>
+
+                    <div id="sampleCodeContainer" class="mt-4" style="display:none;">
+                        <h6 class="fw-bold text-primary"><i class="fas fa-code me-2"></i> 맞춤형 SEO/GEO 최적화 샘플 코드</h6>
+                        <p class="small text-muted mb-3">분석된 내용을 바탕으로 생성된 페이지 최적화 예시입니다.</p>
+                        
+                        <div class="mb-3">
+                            <label class="small fw-bold mb-1">SEO 최적화 (JSON-LD / Meta)</label>
+                            <div class="code-block p-0">
+                                <button class="copy-btn" onclick="copyText('seoSampleCode')">Copy</button>
+                                <pre class="m-0"><code id="seoSampleCode" class="language-html"></code></pre>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="small fw-bold mb-1">GEO (AI 검색 엔진용 시맨틱 데이터)</label>
+                            <div class="code-block p-0">
+                                <button class="copy-btn" onclick="copyText('geoSampleCode')">Copy</button>
+                                <pre class="m-0"><code id="geoSampleCode" class="language-html"></code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/dashboard.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
