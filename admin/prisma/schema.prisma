@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         Int      @id @default(autoincrement())
+  google_id  String   @unique @map("google_id")
+  email      String
+  name       String?
+  created_at DateTime @default(now()) @map("created_at")
+  
+  ownedOrganizations Organization[]       @relation("Owner")
+  memberships        OrganizationMember[]
+
+  @@map("users")
+}
+
+model Organization {
+  id         Int      @id @default(autoincrement())
+  name       String
+  owner_id   Int      @map("owner_id")
+  owner      User     @relation("Owner", fields: [owner_id], references: [id])
+  created_at DateTime @default(now()) @map("created_at")
+  
+  members    OrganizationMember[]
+  sites      Site[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id              Int          @id @default(autoincrement())
+  organization_id Int          @map("organization_id")
+  user_id         Int          @map("user_id")
+  role            String       @default("member")
+  joined_at       DateTime     @default(now()) @map("joined_at")
+  
+  organization    Organization @relation(fields: [organization_id], references: [id])
+  user            User         @relation(fields: [user_id], references: [id])
+
+  @@unique([organization_id, user_id])
+  @@map("organization_members")
+}
+
+model Site {
+  id              Int          @id @default(autoincrement())
+  organization_id Int?         @map("organization_id")
+  url             String
+  api_key         String       @unique @map("api_key")
+  seo_score       Int?         @default(0) @map("seo_score")
+  scraped_data    Json?        @map("scraped_data")
+  deleted_at      DateTime?    @map("deleted_at")
+  created_at      DateTime     @default(now()) @map("created_at")
+  
+  organization    Organization? @relation(fields: [organization_id], references: [id])
+
+  @@map("sites")
+}
+
+model Invitation {
+  id              Int          @id @default(autoincrement())
+  organization_id Int          @map("organization_id")
+  email           String
+  token           String       @unique
+  role            String       @default("member")
+  invited_by      Int          @map("invited_by")
+  expires_at      DateTime     @map("expires_at")
+  created_at      DateTime     @default(now()) @map("created_at")
+
+  @@map("invitations")
+}
