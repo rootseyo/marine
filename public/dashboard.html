@@ -15,8 +15,7 @@
         .sidebar .nav-link i { min-width: 25px; font-size: 1.2rem; margin-right: 15px; text-align: center; }
         .sidebar.collapsed .nav-link span { display: none; }
         .sidebar.collapsed .nav-link i { margin-right: 0; }
-        .sidebar.collapsed .logo span, .sidebar.collapsed .logo br { display: none; }
-        .sidebar.collapsed .logo { text-align: center; padding: 0 0 30px; }
+        .sidebar.collapsed .logo { display: none; }
         .sidebar.collapsed .logo i { margin-right: 0; font-size: 1.8rem; }
         .sidebar .nav-link:hover, .sidebar .nav-link.active { color: white; background: rgba(255,255,255,0.1); border-left-color: #3498db; }
         
@@ -24,7 +23,8 @@
         
         .toggle-btn { position: absolute; top: 20px; right: 15px; background: rgba(255,255,255,0.1); color: white; border: none; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; z-index: 1001; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
         .toggle-btn:hover { background: rgba(255,255,255,0.2); }
-        .sidebar.collapsed .toggle-btn { right: 19px; top: 75px; }
+        .sidebar.collapsed .toggle-btn { right: 19px; top: 15px; }
+        .sidebar.collapsed #mainNav { margin-top: 40px; }
 
         .main-content { margin-left: 250px; padding: 30px; transition: all 0.3s ease; }
         .main-content.expanded { margin-left: 70px; }
@@ -34,6 +34,8 @@
         .user-info-wrapper { display: flex; align-items: center; padding: 5px 10px; margin-bottom: 15px; overflow: hidden; }
         .sidebar.collapsed .user-info-wrapper span { display: none; }
         .sidebar.collapsed .user-info-wrapper img { margin-right: 0 !important; }
+        .sidebar.collapsed .user-section .btn span { display: none; }
+        .sidebar.collapsed .user-section .btn { width: 32px !important; height: 32px !important; padding: 0; display: flex; align-items: center; justify-content: center; margin: 0 auto; }
 
         .card { border: none; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
         .step-number { background: #3498db; color: white; width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-right: 10px; font-weight: bold; }
@@ -76,6 +78,19 @@
 
         .preview-box { background: #fff; border: 1px dashed #dee2e6; border-radius: 10px; padding: 20px; position: relative; }
         .social-proof-toast { position: absolute; bottom: 20px; left: 20px; background: white; border-radius: 50px; padding: 10px 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); display: flex; align-items: center; font-size: 0.85rem; border: 1px solid #eee; }
+
+        /* Behavior Timeline Styles */
+        .timeline-container { position: relative; padding-left: 20px; border-left: 2px solid #eef2f7; }
+        .behavior-item { position: relative; padding-bottom: 25px; padding-left: 25px; }
+        .behavior-item::before { content: ""; position: absolute; left: -31px; top: 0; width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 3px solid #3498db; z-index: 10; }
+        .behavior-item.click::before { border-color: #e74c3c; }
+        .behavior-item.scroll::before { border-color: #f1c40f; }
+        .behavior-item.view::before { border-color: #2ecc71; }
+        .behavior-time { font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px; font-weight: 600; }
+        .behavior-content { background: #f8fafc; padding: 12px 15px; border-radius: 12px; border: 1px solid #f1f5f9; }
+        .behavior-title { font-size: 0.85rem; font-weight: 700; color: #1e293b; margin-bottom: 2px; }
+        .behavior-meta { font-size: 0.75rem; color: #64748b; }
+        .extra-small { font-size: 0.7rem; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
@@ -92,7 +107,7 @@
         </div>
         <nav class="nav flex-column flex-grow-1" id="mainNav">
             <a class="nav-link" href="/dashboard"><i class="fas fa-tachometer-alt"></i> <span>대시보드</span></a>
-            <a class="nav-link" href="/automation"><i class="fas fa-robot"></i> <span>자동화 설정</span></a>
+            <a class="nav-link" href="/automation"><i class="fas fa-wand-magic-sparkles"></i> <span>자동화 설정</span></a>
             <a class="nav-link" href="/reports"><i class="fas fa-chart-line"></i> <span>분석 리포트</span></a>
             <a class="nav-link" href="/organizations"><i class="fas fa-building"></i> <span>내 조직</span></a>
             <a class="nav-link" href="/subscription"><i class="fas fa-credit-card"></i> <span>요금제 관리</span></a>
@@ -227,11 +242,26 @@
 
         <!-- Section: Automation Control -->
         <div id="sectionAutomation" class="content-section hidden">
-            <div class="row">
+            <div id="learningStatusContainer" class="mb-4"></div>
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h4 class="fw-bold mb-0">마케팅 자동화 설정</h4>
+                <div class="d-flex align-items-center bg-dark text-white px-3 py-2 rounded-pill shadow-sm">
+                    <i class="fas fa-magic text-warning me-2"></i>
+                    <span class="fw-bold me-3 small">AI 최적화 (Auto-Pilot)</span>
+                    <label class="switch mb-0" style="transform: scale(0.8); margin-top: -2px;">
+                        <input type="checkbox" id="toggleAiAutoOptimize" onchange="toggleAiOptimize(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="alert alert-light border-0 shadow-sm mb-5 p-3" id="aiAutoOptimizeDesc" style="border-left: 4px solid #f1c40f !important;">
+                <small class="text-muted"><i class="fas fa-info-circle me-1"></i> <strong>AI 최적화 모드:</strong> SDK가 수집하는 실시간 고객 행동 데이터를 분석하여, 각 위젯의 문구와 노출 조건을 AI가 스스로 가장 성과가 높은 방향으로 업데이트합니다.</small>
+            </div>
+            <div class="row g-5">
                 <!-- 1. Social Proof -->
                 <div class="col-md-6">
-                    <div class="card mb-4 h-100">
-                        <div class="card-body">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
                             <div class="d-flex justify-content-between align-items-start mb-4">
                                 <div>
                                     <h5 class="card-title fw-bold mb-1"><i class="fas fa-users text-primary me-2"></i> 실시간 구매 알림</h5>
@@ -243,10 +273,19 @@
                                 </label>
                             </div>
                             
-                            <div class="mb-3">
+                            <div class="mb-4">
                                 <label class="form-label small fw-bold">알림 문구 템플릿</label>
                                 <input type="text" class="form-control" id="socialProofText" value="{location} {customer}님이 {product}를 방금 구매했습니다!">
                                 <div class="form-text">사용 가능한 태그: {location}, {customer}, {product}, {time}</div>
+                            </div>
+
+                            <div class="conversion-setup p-3 bg-light rounded border mb-4">
+                                <label class="form-label small fw-bold text-primary"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionSocialProof">
+                                    <option value="click">위젯 클릭 시</option>
+                                    <option value="view">3초 이상 노출 시</option>
+                                    <option value="purchase">알림 후 30분 내 구매</option>
+                                </select>
                             </div>
 
                             <div class="preview-box mt-auto" style="height: 100px; background-color: #f8f9fa;">
@@ -261,8 +300,8 @@
 
                 <!-- 2. Exit Intent -->
                 <div class="col-md-6">
-                    <div class="card mb-4 h-100">
-                        <div class="card-body">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
                             <div class="d-flex justify-content-between align-items-start mb-4">
                                 <div>
                                     <h5 class="card-title fw-bold mb-1"><i class="fas fa-door-open text-danger me-2"></i> 이탈 방지 AI 팝업</h5>
@@ -274,18 +313,27 @@
                                 </label>
                             </div>
 
-                            <div class="mb-3">
+                            <div class="mb-4">
                                 <label class="form-label small fw-bold">이탈 방지 문구</label>
                                 <textarea class="form-control" id="exitIntentEditor" rows="3">잠시만요! 🏃‍♂️ 지금 나가시기엔 너무 아쉬운 혜택이 있어요.</textarea>
+                            </div>
+
+                            <div class="conversion-setup p-3 bg-light rounded border">
+                                <label class="form-label small fw-bold text-danger"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionExitIntent">
+                                    <option value="stay">팝업 노출 후 페이지 체류</option>
+                                    <option value="click">할인권 받기 클릭</option>
+                                    <option value="purchase">팝업 후 당일 구매 완료</option>
+                                </select>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 3. Tab Recovery (New) -->
+                <!-- 3. Tab Recovery -->
                 <div class="col-md-6">
-                    <div class="card mb-4 h-100">
-                        <div class="card-body">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
                             <div class="d-flex justify-content-between align-items-start mb-4">
                                 <div>
                                     <h5 class="card-title fw-bold mb-1"><i class="fas fa-exchange-alt text-warning me-2"></i> 탭 복구 (Tab Recovery)</h5>
@@ -297,19 +345,27 @@
                                 </label>
                             </div>
 
-                            <div class="mb-3">
+                            <div class="mb-4">
                                 <label class="form-label small fw-bold">깜빡임 문구</label>
                                 <input type="text" class="form-control" id="tabRecoveryText" value="🎁 놓치지 마세요!">
                                 <div class="form-text">원래 제목과 이 문구가 번갈아가며 표시됩니다.</div>
+                            </div>
+
+                            <div class="conversion-setup p-3 bg-light rounded border">
+                                <label class="form-label small fw-bold text-warning"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionTabRecovery">
+                                    <option value="return">탭 다시 활성화(복귀)</option>
+                                    <option value="stay">복귀 후 1분 이상 추가 체류</option>
+                                </select>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 4. Price Match (New) -->
+                <!-- 4. Price Match -->
                 <div class="col-md-6">
-                    <div class="card mb-4 h-100">
-                        <div class="card-body">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
                             <div class="d-flex justify-content-between align-items-start mb-4">
                                 <div>
                                     <h5 class="card-title fw-bold mb-1"><i class="fas fa-tags text-success me-2"></i> 가격 비교 방어</h5>
@@ -321,17 +377,175 @@
                                 </label>
                             </div>
 
-                            <div class="mb-3">
+                            <div class="mb-4">
                                 <label class="form-label small fw-bold">제안 문구</label>
                                 <input type="text" class="form-control" id="priceMatchText" value="🔎 최저가를 찾고 계신가요? 여기서 5% 할인받으세요: SAVE5">
+                            </div>
+
+                            <div class="conversion-setup p-3 bg-light rounded border">
+                                <label class="form-label small fw-bold text-success"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionPriceMatch">
+                                    <option value="copy_stop">복사 후 이탈 방지(구매 진행)</option>
+                                    <option value="coupon_use">제안된 쿠폰 코드 사용</option>
+                                    <option value="purchase">비교 시도 후 최종 결제</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. Shipping Countdown -->
+                <div class="col-md-6">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-shipping-fast text-info me-2"></i> 마감 임박 배송 타이머</h5>
+                                    <p class="text-muted small">오늘 배송 마감 시간을 보여주어 구매 긴박감을 조성합니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="toggleShippingTimer">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="row g-3 mb-4">
+                                <div class="col-6">
+                                    <label class="form-label small fw-bold">마감 시간 (24시)</label>
+                                    <input type="number" class="form-control" id="shippingClosingHour" value="16">
+                                </div>
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label small fw-bold">알림 문구</label>
+                                <textarea class="form-control" id="shippingTimerText" rows="2">오늘 배송 마감까지 {timer} 남았습니다! 지금 주문하면 {delivery_date} 도착 예정.</textarea>
+                            </div>
+                            <div class="conversion-setup p-3 bg-light rounded border">
+                                <label class="form-label small fw-bold text-info"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionShippingTimer">
+                                    <option value="checkout">10분 내 결제 페이지 진입</option>
+                                    <option value="click">배송 정보 확인 클릭</option>
+                                    <option value="purchase">마감 전 결제 완료</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. Scroll Reward -->
+                <div class="col-md-6">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-scroll text-warning me-2"></i> 스크롤 깊이 보상</h5>
+                                    <p class="text-muted small">상세페이지를 끝까지 읽는 고관여 유저에게 혜택을 줍니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="toggleScrollReward">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="row g-3 mb-4">
+                                <div class="col-6">
+                                    <label class="form-label small fw-bold">트리거 깊이 (%)</label>
+                                    <input type="number" class="form-control" id="scrollDepth" value="80">
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label small fw-bold">쿠폰 코드</label>
+                                    <input type="text" class="form-control" id="scrollCoupon" value="SECRET10">
+                                </div>
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label small fw-bold">제안 문구</label>
+                                <textarea class="form-control" id="scrollRewardText" rows="2">꼼꼼히 읽어주셔서 감사합니다! {product} 전용 시크릿 할인권을 드려요.</textarea>
+                            </div>
+                            <div class="conversion-setup p-3 bg-light rounded border">
+                                <label class="form-label small fw-bold text-warning"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionScrollReward">
+                                    <option value="copy">쿠폰 코드 복사</option>
+                                    <option value="view">보상 팝업 노출</option>
+                                    <option value="purchase">노출 후 즉시 구매</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 7. Rental Calculator -->
+                <div class="col-md-6">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-calculator text-primary me-2"></i> 렌탈/구독 전환 계산기</h5>
+                                    <p class="text-muted small">고가 상품을 월 납입금으로 환산해 가격 장벽을 낮춥니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="toggleRentalCalc">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label small fw-bold">렌탈 기간 (개월)</label>
+                                <select class="form-select" id="rentalPeriod">
+                                    <option value="12">12개월</option>
+                                    <option value="24" selected>24개월</option>
+                                    <option value="36">36개월</option>
+                                    <option value="48">48개월</option>
+                                </select>
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label small fw-bold">제안 문구</label>
+                                <textarea class="form-control" id="rentalCalcText" rows="2">이 제품, 하루 {daily_price}원이면 충분합니다. (월 {monthly_price}원 / {period}개월 기준)</textarea>
+                            </div>
+                            <div class="conversion-setup p-3 bg-light rounded border">
+                                <label class="form-label small fw-bold text-primary"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionRentalCalc">
+                                    <option value="click">계산기 위젯 클릭</option>
+                                    <option value="consult">렌탈 상담 신청 완료</option>
+                                    <option value="cart">확인 후 장바구니 담기</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 8. Inactivity Nudge -->
+                <div class="col-md-6">
+                    <div class="card mb-5 h-100 shadow-sm border-0">
+                        <div class="card-body p-4">
+                            <div class="d-flex justify-content-between align-items-start mb-4">
+                                <div>
+                                    <h5 class="card-title fw-bold mb-1"><i class="fas fa-bed text-secondary me-2"></i> 장기 체류 무반응 리마인더</h5>
+                                    <p class="text-muted small">움직임이 없는 고객을 깨워 다시 관심을 유도합니다.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked id="toggleInactivityNudge">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label small fw-bold">무반응 기준 (초)</label>
+                                <input type="number" class="form-control" id="inactivityIdleSeconds" value="30">
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label small fw-bold">알림 문구</label>
+                                <textarea class="form-control" id="inactivityNudgeText" rows="2">혹시 더 궁금한 점이 있으신가요? {customer}님만을 위한 가이드를 확인해보세요!</textarea>
+                            </div>
+                            <div class="conversion-setup p-3 bg-light rounded border">
+                                <label class="form-label small fw-bold text-secondary"><i class="fas fa-bullseye me-1"></i> 전환(Conversion) 조건 설정</label>
+                                <select class="form-select form-select-sm" id="conversionInactivityNudge">
+                                    <option value="wake">알림 후 다시 활동 발생</option>
+                                    <option value="click">추천 상품 클릭</option>
+                                    <option value="chat">상담 채팅창 연결</option>
+                                </select>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="text-end mt-3">
-                <button class="btn btn-primary px-4" onclick="saveAutomation()">
+            <div class="text-end mt-4 mb-5">
+                <button class="btn btn-primary btn-lg px-5 shadow" onclick="saveAutomation()">
                     <i class="fas fa-save me-2"></i> 모든 설정 저장
                 </button>
             </div>
@@ -341,56 +555,60 @@
         <div id="sectionSubscription" class="content-section hidden">
             <div class="text-center mb-5">
                 <h2 class="fw-bold">합리적인 요금제로 비즈니스를 키우세요</h2>
-                <p class="text-muted">현재 플랜: <span class="badge bg-primary">Free</span></p>
+                <p class="text-muted">현재 플랜: <span class="badge bg-primary" id="currentPlanBadge">Free</span></p>
+                <div class="alert alert-warning d-inline-block py-1 px-3 small">
+                    <i class="fas fa-bug me-1"></i> Debug Mode: 아래 버튼을 눌러 플랜을 즉시 변경할 수 있습니다.
+                </div>
             </div>
 
             <div class="row g-3 justify-content-center mb-5">
                 <!-- Free Plan -->
                 <div class="col-xl-3 col-md-4">
-                    <div class="card pricing-card h-100 p-3">
+                    <div class="card pricing-card h-100 p-3" id="cardPlanFree">
                         <div class="card-body text-center p-2 d-flex flex-column">
                             <h5 class="fw-bold">Free</h5>
                             <div class="price-text my-3">₩0<span class="fs-6 text-muted">/월</span></div>
                             <ul class="list-unstyled text-start mb-4 small flex-grow-1">
-                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 기초 SEO 진단 (월 1회)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> SEO 정밀 진단 (<b>1일 1회</b>)</li>
                                 <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 주요 검색 엔진 색인 가이드</li>
-                                <li class="mb-2 text-muted"><i class="fas fa-times me-2"></i> AI 이탈 방지 팝업</li>
+                                <li class="mb-2 text-muted"><i class="fas fa-times me-2"></i> AI 이탈 방지 (무제한)</li>
                                 <li class="mb-2 text-muted"><i class="fas fa-times me-2"></i> 실시간 구매 알림 위젯</li>
                             </ul>
-                            <button class="btn btn-outline-dark btn-sm w-100 disabled">현재 사용 중</button>
+                            <button class="btn btn-outline-dark btn-sm w-100" onclick="debugSetPlan('free')">이 플랜으로 변경 (Debug)</button>
                         </div>
                     </div>
                 </div>
                 <!-- Starter Plan -->
                 <div class="col-xl-3 col-md-4">
-                    <div class="card pricing-card featured h-100 p-3 shadow-sm border-primary">
+                    <div class="card pricing-card featured h-100 p-3 shadow-sm border-primary" id="cardPlanStarter">
                         <div class="recommended-badge">RECOMMENDED</div>
                         <div class="card-body text-center p-2 d-flex flex-column">
                             <h5 class="fw-bold">Starter</h5>
                             <div class="price-text my-3">₩99,000<span class="fs-6 text-muted">/월</span></div>
                             <ul class="list-unstyled text-start mb-4 small flex-grow-1">
-                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> SEO 정밀 분석 (<b>일 30회</b>)</li>
-                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> AI 이탈 방지 (월 5,000회)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> SEO 정밀 진단 (<b>1일 10회</b>)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> AI 이탈 방지 (<b>무제한</b>)</li>
                                 <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 실시간 구매 알림 위젯</li>
                                 <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 검색 엔진 색인 현황 모니터링</li>
                             </ul>
-                            <button class="btn btn-primary btn-sm w-100" onclick="alert('결제 페이지로 이동합니다.')">업그레이드</button>
+                            <button class="btn btn-primary btn-sm w-100" onclick="debugSetPlan('starter')">이 플랜으로 변경 (Debug)</button>
                         </div>
                     </div>
                 </div>
                 <!-- Pro Plan -->
                 <div class="col-xl-3 col-md-4">
-                    <div class="card pricing-card h-100 p-3">
+                    <div class="card pricing-card h-100 p-3" id="cardPlanPro">
                         <div class="card-body text-center p-2 d-flex flex-column">
                             <h5 class="fw-bold">Pro</h5>
                             <div class="price-text my-3">₩190,000<span class="fs-6 text-muted">/월</span></div>
                             <ul class="list-unstyled text-start mb-4 small flex-grow-1">
-                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> SEO 정밀 분석 (<b>일 50회</b>)</li>
-                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> AI 이탈 방지 (무제한 호출)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> SEO 정밀 진단 (<b>1일 30회</b>)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> AI 이탈 방지 (<b>무제한</b>)</li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> <b>AIO(AI 검색 최적화) 리포트</b></li>
+                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> <b>우선 순위 AI 스캔 지원</b></li>
                                 <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 커스텀 마케팅 시나리오 설정</li>
-                                <li class="mb-2"><i class="fas fa-check text-success me-2"></i> 주간 AI 성과 리포트 (PDF)</li>
                             </ul>
-                            <button class="btn btn-outline-primary btn-sm w-100" onclick="alert('결제 페이지로 이동합니다.')">업그레이드</button>
+                            <button class="btn btn-outline-primary btn-sm w-100" onclick="debugSetPlan('pro')">이 플랜으로 변경 (Debug)</button>
                         </div>
                     </div>
                 </div>
@@ -473,7 +691,7 @@
             <!-- Installation Script -->
             <div id="orgScriptSection" class="card mt-4 hidden">
                 <div class="card-body">
-                    <h5 class="card-title fw-bold text-success"><i class="fas fa-code me-2"></i> SDK 설치 스크립트</h5>
+                    <h5 class="card-title fw-bold text-success"><i class="fas fa-code me-2"></i> 마케팅 자동화 스크립트</h5>
                     <p class="text-muted small">선택한 조직의 사이트에서 AI 기능을 활성화하려면 아래 코드를 &lt;head&gt; 섹션에 삽입하세요.</p>
                     <div id="orgScriptList">
                         <!-- Script items will be injected here -->
@@ -557,7 +775,7 @@
                     <!-- Analysis Method Tabs -->
                     <ul class="nav nav-pills mb-3" id="scanTabs" role="tablist">
                         <li class="nav-item">
-                            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tabDirect" type="button">URL 직접 입력</button>
+                            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tabDirect" type="button">URL 직접 등록</button>
                         </li>
                         <li class="nav-item">
                             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tabSitemap" type="button">Sitemap 분석</button>
@@ -570,18 +788,18 @@
                             <div class="input-group mb-3">
                                 <span class="input-group-text">https://</span>
                                 <input type="text" id="siteUrl" class="form-control" placeholder="www.example.com">
-                                <button class="btn btn-primary px-4" onclick="registerSite()">
-                                    <i class="fas fa-magic me-2"></i> AI 분석 시작
+                                <button class="btn btn-primary px-4" onclick="registerOnlySite()">
+                                    <i class="fas fa-plus me-2"></i> 사이트 등록
                                 </button>
                             </div>
                         </div>
-
+                        
                         <!-- Sitemap Tab -->
                         <div class="tab-pane fade" id="tabSitemap">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <p class="text-muted small mb-0">쇼핑몰의 sitemap.xml 주소를 입력하면 모든 페이지를 한 번에 분석할 수 있습니다.</p>
-                                <div class="badge bg-light text-dark border p-2">
-                                    남은 분석 횟수: <span id="remainingCount" class="fw-bold text-primary">--</span> / 1000
+                                <p class="text-muted small mb-0">쇼핑몰의 sitemap.xml 주소를 입력하면 모든 페이지를 한 번에 등록할 수 있습니다.</p>
+                                <div class="badge bg-light text-dark border p-2" id="usageBadge">
+                                    오늘의 분석 잔여: <span id="remainingCount" class="fw-bold text-primary">--</span> / <span id="limitCount">--</span> (<span id="planLabel">--</span>)
                                 </div>
                             </div>
                             <div class="input-group mb-3">
@@ -594,7 +812,7 @@
                             <div id="sitemapResult" class="mt-3 hidden">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <h6 class="mb-0">추출된 URL (<span id="urlCount">0</span>개)</h6>
-                                    <button class="btn btn-sm btn-outline-primary" onclick="batchAnalyzeSitemap()">선택 항목 일괄 분석</button>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="batchAnalyzeSitemap()">선택 항목 사이트 등록</button>
                                 </div>
                                 <div class="list-group list-group-flush border rounded" id="sitemapUrlList" style="max-height: 200px; overflow-y: auto;">
                                     <!-- URLs will be injected here -->
@@ -614,7 +832,12 @@
             <div class="card mb-4">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h5 class="card-title fw-bold mb-0">최근 분석 리포트 목록</h5>
+                        <div class="d-flex align-items-center">
+                            <h5 class="card-title fw-bold mb-0 me-3">사이트 목록</h5>
+                            <button class="btn btn-sm btn-outline-primary" onclick="batchAnalyzeSelected()">
+                                <i class="fas fa-play me-1"></i> 선택 사이트 일괄 분석
+                            </button>
+                        </div>
                         <div class="input-group" style="max-width: 300px;">
                             <span class="input-group-text bg-white border-end-0"><i class="fas fa-search text-muted"></i></span>
                             <input type="text" id="historySearchInput" class="form-control border-start-0 shadow-none" placeholder="URL 검색..." onkeyup="filterHistoryTable()">
@@ -624,13 +847,16 @@
                         <table class="table table-hover align-middle small">
                             <thead class="table-light">
                                 <tr>
+                                    <th style="width: 40px;"><input type="checkbox" id="checkAllSites" onclick="toggleAllSites(this)"></th>
                                     <th onclick="sortHistory('url')" style="cursor: pointer;">사이트 URL <i class="fas fa-sort ms-1"></i></th>
+                                    <th>상태</th>
                                     <th onclick="sortHistory('seo_score')" style="cursor: pointer;">SEO 점수 <i class="fas fa-sort ms-1"></i></th>
-                                    <th onclick="sortHistory('created_at')" style="cursor: pointer;">마지막 스캔 일시 <i class="fas fa-sort ms-1"></i></th>
+                                    <th onclick="sortHistory('created_at')" style="cursor: pointer;">등록 일시 <i class="fas fa-sort ms-1"></i></th>
+                                    <th>액션</th>
                                 </tr>
                             </thead>
                             <tbody id="reportHistoryList" style="cursor: pointer;">
-                                <tr><td colspan="3" class="text-center py-3">데이터를 불러오는 중...</td></tr>
+                                <tr><td colspan="6" class="text-center py-3">데이터를 불러오는 중...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -640,9 +866,16 @@
             <div class="card hidden" id="step3Card">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-4">
-                        <button class="btn btn-sm btn-outline-secondary" onclick="navigateTo('/reports')">
-                            <i class="fas fa-arrow-left me-1"></i> 목록으로 돌아가기
-                        </button>
+                        <div class="d-flex align-items-center">
+                            <button class="btn btn-sm btn-outline-secondary me-3" onclick="navigateTo('/reports')">
+                                <i class="fas fa-arrow-left me-1"></i> 목록
+                            </button>
+                            <div id="reportHistorySelector" style="display:none;">
+                                <select class="form-select form-select-sm border-primary" id="historySelect" onchange="switchReportVersion(this.value)" style="min-width: 200px;">
+                                    <option value="latest">최신 분석 결과 (현재)</option>
+                                </select>
+                            </div>
+                        </div>
                         <span class="badge bg-success">AI 분석 리포트</span>
                     </div>
 
@@ -683,7 +916,8 @@
                     </div>
                     <div class="card mt-4 border-0 shadow-sm" id="aiInsightCard" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
                         <div class="card-body">
-                            <h5 class="card-title text-white">AI 검색 엔진(AIO) 노출 지수</h5>
+                            <h5 class="card-title text-white">AIO (AI 검색 최적화) 노출 지수</h5>
+                            <p class="small text-white-50 mb-3">ChatGPT, Perplexity 등 AI 검색 엔진이 사이트 정보를 얼마나 잘 읽어가는지 분석합니다.</p>
                             <div class="row align-items-center">
                                 <div class="col-md-3 text-center">
                                     <div style="font-size: 3rem; font-weight: bold;" id="aiScore">--</div>
@@ -711,7 +945,7 @@
                     </div>
 
                     <div class="alert alert-success mt-4">
-                        <h6 class="fw-bold">연동 코드 (브라이트 네트워크 SDK)</h6>
+                        <h6 class="fw-bold">마케팅 자동화 스크립트</h6>
                         <p class="small text-muted mb-2">이 코드를 쇼핑몰의 &lt;head&gt; 섹션에 복사해 넣으세요.</p>
                         <div class="code-block p-0">
                             <button class="copy-btn" onclick="copyText('scriptTagCode')">Copy</button>
@@ -744,7 +978,13 @@
         </div>
     </div>
 
-    <script src="/js/dashboard.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+        <!-- Modular JS Files -->
+        <script src="/js/core.js"></script>
+        <script src="/js/overview.js"></script>
+        <script src="/js/automation.js"></script>
+        <script src="/js/reports.js"></script>
+        <script src="/js/organizations.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+    
