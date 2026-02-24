@@ -34,7 +34,7 @@ const pool = new Pool({
 
 // --- AI & Tools Setup ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
 const turndownService = new TurndownService({
     headingStyle: 'atx',
@@ -132,6 +132,11 @@ passport.deserializeUser(async (id, done) => {
 // --- Helper Middleware ---
 function isAuthenticated(req, res, next) {
     if (req.isAuthenticated()) return next();
+    
+    // 페이지 요청(GET)인 경우 로그인 페이지로 리다이렉트, 그 외(API 등)는 JSON 반환
+    if (req.accepts('html') && req.method === 'GET') {
+        return res.redirect('/');
+    }
     res.status(401).json({ error: 'Unauthorized. Please login.' });
 }
 
@@ -230,7 +235,32 @@ async function runAutoPilotOptimization(siteId) {
             }
         `;
 
-        const result = await model.generateContent(prompt);
+        // --- AI Analysis with Intelligent Retry (Handling 429 & 503) ---
+        let result = null;
+        let attempts = 0;
+        const maxAttempts = 5; // 재시도 횟수 상향
+        
+        while (attempts < maxAttempts) {
+            try {
+                result = await model.generateContent(prompt);
+                if (result) break; // Success!
+            } catch (err) {
+                attempts++;
+                const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
+                
+                if (isRateLimit) {
+                    const delaySeconds = 60; // 대기 시간 60초로 연장
+                    console.warn(`[AI] Rate limit hit (429). Waiting ${delaySeconds}s before attempt ${attempts + 1}...`);
+                    await new Promise(r => setTimeout(r, delaySeconds * 1000));
+                } else {
+                    console.error(`[AI Analysis] Attempt ${attempts} failed:`, err.message);
+                    if (attempts >= maxAttempts) throw err;
+                    await new Promise(r => setTimeout(r, 2000 * attempts));
+                }
+            }
+        }
+        
+        if (!result) throw new Error("AI 분석 결과 생성에 실패했습니다 (최대 재시도 초과)");
         const textResponse = result.response.text();
         
         let aiResult = null;
@@ -373,7 +403,7 @@ app.get('/sdk.js', async (req, res) => {
             }
         } else {
             // Treat as individual Site API Key
-            const result = await client.query('SELECT * FROM sites WHERE api_key = $1', [key]);
+            const result = await client.query("SELECT * FROM sites WHERE api_key = $1 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at')", [key]);
             site = result.rows[0];
             if (site) resolvedOrgId = site.organization_id;
         }
@@ -583,131 +613,134 @@ app.get('/sdk.js', async (req, res) => {
         setTimeout(() => { toast.style.opacity = "0"; toast.style.transform = "translateY(20px)"; setTimeout(() => toast.remove(), 500); }, duration);
     }
 
-    // 1. Social Proof
-    if (config.social_proof?.enabled) {
-        const locations = ['서울시', '부산시', '인천시', '하남시'];
-        const customers = ['김*연', '이*준', '박*민'];
-        const products = siteData.detected_products || ['인기 상품'];
-        setInterval(() => {
-            const loc = locations[Math.floor(Math.random() * locations.length)];
-            const cust = customers[Math.floor(Math.random() * customers.length)];
-            const prod = products[Math.floor(Math.random() * products.length)];
-            showToast(config.social_proof.template.replace('{location}', '<b>'+loc+'</b>').replace('{customer}', '<b>'+cust+'</b>').replace('{product}', '<b>'+prod+'</b>'));
-        }, 20000);
-    }
-
-    // 2. Shipping Countdown
-    if (config.shipping_timer?.enabled) {
-        function updateTimer() {
-            const now = new Date();
-            const deadline = new Date();
-            deadline.setHours(config.shipping_timer.closing_hour, 0, 0, 0);
-            
-            if (now > deadline) return; // Passed deadline
-
-            const diff = deadline - now;
-            const h = Math.floor(diff / 3600000);
-            const m = Math.floor((diff % 3600000) / 60000);
-            const s = Math.floor((diff % 60000) / 1000);
-            const timerStr = \`\${h}시간 \${m}분 \${s}초\`;
-            
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            const dateStr = \`\${tomorrow.getMonth()+1}/\${tomorrow.getDate()}(\${['일','월','화','수','목','금','토'][tomorrow.getDay()]})\`;
-
-            let timerEl = document.getElementById('bn-shipping-timer');
-            if (!timerEl) {
-                timerEl = document.createElement('div');
-                timerEl.id = 'bn-shipping-timer';
-                timerEl.style = "position: sticky; top: 0; width: 100%; background: #ebf5ff; color: #2980b9; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; z-index: 1000001; border-bottom: 1px solid #d6eaf8;";
-                document.body.prepend(timerEl);
-            }
-            timerEl.innerHTML = config.shipping_timer.text.replace('{timer}', '<span style="color: #e74c3c;">' + timerStr + '</span>').replace('{delivery_date}', '<b>' + dateStr + '</b>');
+    // --- 마케팅 자동화 기능 실행 (승인된 사이트만) ---
+    if (isVerified) {
+        // 1. Social Proof
+        if (config.social_proof?.enabled) {
+            const locations = ['서울시', '부산시', '인천시', '하남시'];
+            const customers = ['김*연', '이*준', '박*민'];
+            const products = siteData.detected_products || ['인기 상품'];
+            setInterval(() => {
+                const loc = locations[Math.floor(Math.random() * locations.length)];
+                const cust = customers[Math.floor(Math.random() * customers.length)];
+                const prod = products[Math.floor(Math.random() * products.length)];
+                showToast(config.social_proof.template.replace('{location}', '<b>'+loc+'</b>').replace('{customer}', '<b>'+cust+'</b>').replace('{product}', '<b>'+prod+'</b>'));
+            }, 20000);
         }
-        setInterval(updateTimer, 1000);
-        updateTimer();
-    }
 
-    // 3. Scroll Reward
-    if (config.scroll_reward?.enabled) {
-        let triggered = false;
-        window.addEventListener('scroll', () => {
-            const scrollPercent = (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
-            if (scrollPercent > config.scroll_reward.depth && !triggered) {
-                triggered = true;
-                const prod = (siteData.detected_products && siteData.detected_products[0]) || '본 상품';
-                const popup = document.createElement('div');
-                popup.className = "bn-widget bn-popup";
-                popup.innerHTML = \`
-                    <h3 style="margin-top:0">🎉 시크릿 혜택 발견!</h3>
-                    <p style="font-size:14px; color:#666;">\${config.scroll_reward.text.replace('{product}', '<b>'+prod+'</b>')}</p>
-                    <div style="background:#f9f9f9; padding:15px; border:2px dashed #ddd; font-size:20px; font-weight:bold; margin:20px 0; color:#e67e22;">\${config.scroll_reward.coupon}</div>
-                    <button onclick="navigator.clipboard.writeText('\${config.scroll_reward.coupon}'); alert('쿠폰이 복사되었습니다!'); this.parentElement.remove();" style="background:#e67e22; color:white; border:none; padding:12px 30px; border-radius:10px; cursor:pointer; width:100%; font-weight:bold;">쿠폰 복사하고 혜택받기</button>
-                    <div onclick="this.parentElement.remove()" style="margin-top:15px; font-size:12px; color:#999; cursor:pointer; text-decoration:underline;">다음에 받을게요</div>
-                \`;
-                document.body.appendChild(popup);
-            }
-        });
-    }
+        // 2. Shipping Countdown
+        if (config.shipping_timer?.enabled) {
+            function updateTimer() {
+                const now = new Date();
+                const deadline = new Date();
+                deadline.setHours(config.shipping_timer.closing_hour, 0, 0, 0);
+                
+                if (now > deadline) return; // Passed deadline
 
-    // 4. Rental Calculator (Signature)
-    if (config.rental_calc?.enabled) {
-        // Simple logic: find elements that look like prices
-        setTimeout(() => {
-            const priceRegex = /([0-9,]{4,10})원/;
-            const elements = Array.from(document.querySelectorAll('span, div, p, strong')).filter(el => el.innerText.match(priceRegex));
-            if (elements.length > 0) {
-                const target = elements[0];
-                const rawPrice = target.innerText.match(priceRegex)[1].replace(/,/g, '');
-                const price = parseInt(rawPrice);
-                if (price > 50000) { // Only for items > 50k
-                    const monthly = Math.floor(price / config.rental_calc.period);
-                    const daily = Math.floor(monthly / 30);
-                    
-                    const calcBtn = document.createElement('div');
-                    calcBtn.style = "display: inline-block; margin-left: 10px; background: #f1f2f6; color: #57606f; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid #dfe4ea;";
-                    calcBtn.innerHTML = "💡 렌탈료 계산";
-                    target.appendChild(calcBtn);
+                const diff = deadline - now;
+                const h = Math.floor(diff / 3600000);
+                const m = Math.floor((diff % 3600000) / 60000);
+                const s = Math.floor((diff % 60000) / 1000);
+                const timerStr = \`\${h}시간 \${m}분 \${s}초\`;
+                
+                const tomorrow = new Date();
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                const dateStr = \`\${tomorrow.getMonth()+1}/\${tomorrow.getDate()}(\${['일','월','화','수','목','금','토'][tomorrow.getDay()]})\`;
 
-                    calcBtn.onclick = (e) => {
-                        e.stopPropagation();
-                        alert(config.rental_calc.text
-                            .replace('{daily_price}', daily.toLocaleString())
-                            .replace('{monthly_price}', monthly.toLocaleString())
-                            .replace('{period}', config.rental_calc.period)
-                        );
-                    };
+                let timerEl = document.getElementById('bn-shipping-timer');
+                if (!timerEl) {
+                    timerEl = document.createElement('div');
+                    timerEl.id = 'bn-shipping-timer';
+                    timerEl.style = "position: sticky; top: 0; width: 100%; background: #ebf5ff; color: #2980b9; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; z-index: 1000001; border-bottom: 1px solid #d6eaf8;";
+                    document.body.prepend(timerEl);
                 }
+                timerEl.innerHTML = config.shipping_timer.text.replace('{timer}', '<span style="color: #e74c3c;">' + timerStr + '</span>').replace('{delivery_date}', '<b>' + dateStr + '</b>');
             }
-        }, 2000);
-    }
+            setInterval(updateTimer, 1000);
+            updateTimer();
+        }
 
-    // 5. Inactivity Nudge
-    if (config.inactivity_nudge?.enabled) {
-        let idleTimer;
-        const resetTimer = () => {
-            clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => {
-                const nudge = document.createElement('div');
-                nudge.className = "bn-widget bn-nudge";
-                nudge.innerHTML = "💬 " + config.inactivity_nudge.text.replace('{customer}', '고객');
-                document.body.appendChild(nudge);
-                setTimeout(() => nudge.remove(), 8000);
-            }, config.inactivity_nudge.idle_seconds * 1000);
-        };
-        ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'].forEach(evt => document.addEventListener(evt, resetTimer));
-        resetTimer();
-    }
+        // 3. Scroll Reward
+        if (config.scroll_reward?.enabled) {
+            let triggered = false;
+            window.addEventListener('scroll', () => {
+                const scrollPercent = (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+                if (scrollPercent > config.scroll_reward.depth && !triggered) {
+                    triggered = true;
+                    const prod = (siteData.detected_products && siteData.detected_products[0]) || '본 상품';
+                    const popup = document.createElement('div');
+                    popup.className = "bn-widget bn-popup";
+                    popup.innerHTML = \`
+                        <h3 style="margin-top:0">🎉 시크릿 혜택 발견!</h3>
+                        <p style="font-size:14px; color:#666;">\${config.scroll_reward.text.replace('{product}', '<b>'+prod+'</b>')}</p>
+                        <div style="background:#f9f9f9; padding:15px; border:2px dashed #ddd; font-size:20px; font-weight:bold; margin:20px 0; color:#e67e22;">\${config.scroll_reward.coupon}</div>
+                        <button onclick="navigator.clipboard.writeText('\${config.scroll_reward.coupon}'); alert('쿠폰이 복사되었습니다!'); this.parentElement.remove();" style="background:#e67e22; color:white; border:none; padding:12px 30px; border-radius:10px; cursor:pointer; width:100%; font-weight:bold;">쿠폰 복사하고 혜택받기</button>
+                        <div onclick="this.parentElement.remove()" style="margin-top:15px; font-size:12px; color:#999; cursor:pointer; text-decoration:underline;">다음에 받을게요</div>
+                    \`;
+                    document.body.appendChild(popup);
+                }
+            });
+        }
 
-    // 6. Exit Intent
-    if (config.exit_intent?.enabled) {
-        let showed = false;
-        document.addEventListener('mouseleave', (e) => {
-            if (e.clientY < 0 && !showed) {
-                showed = true;
-                showToast("🎁 " + config.exit_intent.text, 8000);
-            }
-        });
+        // 4. Rental Calculator (Signature)
+        if (config.rental_calc?.enabled) {
+            // Simple logic: find elements that look like prices
+            setTimeout(() => {
+                const priceRegex = /([0-9,]{4,10})원/;
+                const elements = Array.from(document.querySelectorAll('span, div, p, strong')).filter(el => el.innerText.match(priceRegex));
+                if (elements.length > 0) {
+                    const target = elements[0];
+                    const rawPrice = target.innerText.match(priceRegex)[1].replace(/,/g, '');
+                    const price = parseInt(rawPrice);
+                    if (price > 50000) { // Only for items > 50k
+                        const monthly = Math.floor(price / config.rental_calc.period);
+                        const daily = Math.floor(monthly / 30);
+                        
+                        const calcBtn = document.createElement('div');
+                        calcBtn.style = "display: inline-block; margin-left: 10px; background: #f1f2f6; color: #57606f; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid #dfe4ea;";
+                        calcBtn.innerHTML = "💡 렌탈료 계산";
+                        target.appendChild(calcBtn);
+
+                        calcBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            alert(config.rental_calc.text
+                                .replace('{daily_price}', daily.toLocaleString())
+                                .replace('{monthly_price}', monthly.toLocaleString())
+                                .replace('{period}', config.rental_calc.period)
+                            );
+                        };
+                    }
+                }
+            }, 2000);
+        }
+
+        // 5. Inactivity Nudge
+        if (config.inactivity_nudge?.enabled) {
+            let idleTimer;
+            const resetTimer = () => {
+                clearTimeout(idleTimer);
+                idleTimer = setTimeout(() => {
+                    const nudge = document.createElement('div');
+                    nudge.className = "bn-widget bn-nudge";
+                    nudge.innerHTML = "💬 " + config.inactivity_nudge.text.replace('{customer}', '고객');
+                    document.body.appendChild(nudge);
+                    setTimeout(() => nudge.remove(), 8000);
+                }, config.inactivity_nudge.idle_seconds * 1000);
+            };
+            ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'].forEach(evt => document.addEventListener(evt, resetTimer));
+            resetTimer();
+        }
+
+        // 6. Exit Intent
+        if (config.exit_intent?.enabled) {
+            let showed = false;
+            document.addEventListener('mouseleave', (e) => {
+                if (e.clientY < 0 && !showed) {
+                    showed = true;
+                    showToast("🎁 " + config.exit_intent.text, 8000);
+                }
+            });
+        }
     }
 })();
         `;
@@ -1163,7 +1196,8 @@ async function processSiteAnalysis(siteId) {
             2. 상품 가격대를 분석하여 '렌탈 계산기' 활성 여부와 할부 기간(12, 24, 36, 48)을 결정하세요. (5만원 이상 상품 존재 시 활성화 권장)
             3. 배송 관련 언급이 있다면 '배송 타이머' 문구에 반영하세요.
             4. '스크롤 보상' 쿠폰명은 브랜드명과 어울리게 지어주세요.
-            5. **GEO 섹션:** 단순 메타태그가 아니라, AI가 브랜드의 신뢰도와 전문성을 이해할 수 있도록 '지식 그래프' 관점의 JSON-LD 스키마와 'Semantic Context' 데이터를 구성하세요. (FAQ, Product, Review 스키마 등 활용)
+            5. **시멘틱 최적화 섹션:** 메타 title, keywords, description, canonical 태그를 반드시 포함하여 추천 코드를 생성하세요. SEO 점수를 위해 <h1> 태그는 반드시 사용하되, display:none이나 0px 등 숨김 처리 기법은 절대 사용하지 마세요.
+            6. **GEO 섹션:** 단순 메타태그가 아니라, AI가 브랜드의 신뢰도와 전문성을 이해할 수 있도록 '지식 그래프' 관점의 JSON-LD 스키마와 'Semantic Context' 데이터를 구성하세요. (FAQ, Product, Review 스키마 등 활용)
 
             --- 응답 JSON 구조 (필수 포함) ---
             {
@@ -1183,13 +1217,38 @@ async function processSiteAnalysis(siteId) {
                 "detected_products": ["상품1", "상품2"],
                 "ceo_message": "...",
                 "sample_codes": { 
-                    "seo": "전통적인 메타 태그 및 시맨틱 HTML 가이드", 
+                    "seo": "시멘틱 최적화를 위한 필수 메타 태그(title, keywords, description, canonical) 및 HTML 구조 가이드. (주의: <h1> 태그에 display:none을 사용하지 마세요)", 
                     "geo": "AI 검색 엔진을 위한 고급 JSON-LD 및 컨텍스트 데이터" 
                 }
             }
         `;
 
-        const result = await model.generateContent(prompt);
+        // --- AI Analysis with Intelligent Retry (Handling 429 & 503) ---
+        let result = null;
+        let attempts = 0;
+        const maxAttempts = 5; // 재시도 횟수 상향
+        
+        while (attempts < maxAttempts) {
+            try {
+                result = await model.generateContent(prompt);
+                if (result) break; // Success!
+            } catch (err) {
+                attempts++;
+                const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
+                
+                if (isRateLimit) {
+                    const delaySeconds = 60; // 대기 시간 60초로 연장
+                    console.warn(`[AI] Rate limit hit (429). Waiting ${delaySeconds}s before attempt ${attempts + 1}...`);
+                    await new Promise(r => setTimeout(r, delaySeconds * 1000));
+                } else {
+                    console.error(`[AI Analysis] Attempt ${attempts} failed:`, err.message);
+                    if (attempts >= maxAttempts) throw err;
+                    await new Promise(r => setTimeout(r, 2000 * attempts));
+                }
+            }
+        }
+        
+        if (!result) throw new Error("AI 분석 결과 생성에 실패했습니다 (최대 재시도 초과)");
         const textResponse = result.response.text();
         
         let aiResult = {};

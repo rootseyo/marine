@@ -443,3 +443,29 @@ function updateSortIcons(activeField) {
         }
     });
 }
+
+/**
+ * Site Removal (Soft Delete)
+ */
+async function deleteSite(siteId) {
+    if (!confirm("정말 이 사이트를 삭제하시겠습니까?\n삭제된 사이트는 휴지통에서 30일간 보관됩니다.")) return;
+
+    try {
+        const res = await fetch(`/api/sites/${siteId}`, {
+            method: 'DELETE'
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+            alert("사이트가 삭제되었습니다.");
+            loadReportHistory(); // 목록 새로고침
+            if (typeof loadUsage === 'function') loadUsage(); // 사용량 새로고침
+            if (typeof loadSiteHistory === 'function') loadSiteHistory(); // 대시보드 목록 새로고침
+        } else {
+            alert(data.error || "삭제 실패");
+        }
+    } catch (err) {
+        console.error("Delete failed", err);
+        alert("서버 오류가 발생했습니다.");
+    }
+}

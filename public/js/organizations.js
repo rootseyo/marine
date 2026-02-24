@@ -127,11 +127,7 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
                 : 'https://app.brightnetworks.kr';
                 
             html += `
-                <div class="mb-5 p-4 bg-light rounded border border-primary shadow-sm">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h6 class="mb-0 fw-bold text-primary"><i class="fas fa-code me-2"></i> 마케팅 자동화 스크립트</h6>
-                    </div>
-                    <p class="text-muted small mb-3">아래 코드를 사이트의 &lt;head&gt; 섹션에 복사하여 붙여넣으세요. 설치 후 사이트에 접속하면 자동으로 감지됩니다.</p>
+                <div class="mb-5">
                     <div class="code-block p-0">
                         <button class="copy-btn" onclick="copyText('script_universal')">Copy</button>
                         <pre class="m-0"><code id="script_universal" class="language-html">&lt;script src="${sdkHost}/sdk.js?key=${displayId}" async&gt;&lt;/script&gt;</code></pre>
@@ -233,16 +229,26 @@ function renderOrgSitesTable() {
 
     let html = `
         <div class="table-responsive">
-            <table class="table table-sm table-hover border rounded overflow-hidden mb-0">
+            <table class="table table-sm table-hover border rounded overflow-hidden mb-0 align-middle">
                 <thead class="table-light">
-                    <tr><th>도메인</th><th>상태</th><th>마지막 스캔</th></tr>
+                    <tr>
+                        <th>도메인</th>
+                        <th>상태</th>
+                        <th>마지막 스캔</th>
+                        <th class="text-center">액션</th>
+                    </tr>
                 </thead>
                 <tbody>
                     ${pagedSites.map(site => `
                         <tr>
-                            <td class="fw-bold">${site.url}</td>
-                            <td><span class="badge bg-success">연결됨</span></td>
+                            <td class="fw-bold text-primary">${site.url}</td>
+                            <td><span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25">연결됨</span></td>
                             <td class="text-muted small">${new Date(site.created_at).toLocaleDateString()}</td>
+                            <td class="text-center">
+                                <button class="btn btn-xs btn-outline-danger border-0" onclick="deleteSiteFromOrg('${site.id}', '${site.url}')" title="도메인 연결 해제">
+                                    <i class="fas fa-trash-alt"></i>
+                                </button>
+                            </td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -258,6 +264,31 @@ function renderOrgSitesTable() {
         </ul></nav></div>`;
     }
     container.innerHTML = html;
+}
+
+/**
+ * Delete site from Organization view
+ */
+async function deleteSiteFromOrg(siteId, url) {
+    if (!confirm(`정말 '${url}' 도메인 연결을 해제하시겠습니까?\n해제된 도메인은 휴지통으로 이동하며, AI 마케팅 기능이 중단됩니다.`)) return;
+
+    try {
+        const res = await fetch(`/api/sites/${siteId}`, {
+            method: 'DELETE'
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+            alert("도메인 연결이 해제되었습니다.");
+            refreshOrgSelection(); // 현재 조직 정보 다시 불러오기
+            if (typeof loadUsage === 'function') loadUsage(); // 사용량 업데이트
+        } else {
+            alert(data.error || "해제 실패");
+        }
+    } catch (err) {
+        console.error("Delete failed", err);
+        alert("서버 오류가 발생했습니다.");
+    }
 }
 
 function filterOrgSites() { orgSitesPage = 1; renderOrgSitesTable(); }
