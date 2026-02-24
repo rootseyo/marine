@@ -2,8 +2,8 @@
 set -e # 오류 발생 시 즉시 중단
 
 # --- 설정 ---
-SERVER="pi-server"
-REMOTE_DIR="~/work/marine"
+SERVER="mini-sean"
+REMOTE_DIR="/Users/sean/work/marine"
 TEMP_ARCHIVE="marine-deploy.tar.gz"
 
 echo "=========================================="
@@ -13,7 +13,7 @@ echo "=========================================="
 # 1. 프로젝트 압축
 echo "📦 소스 코드 압축 중..."
 # .env 파일은 제외하고 압축합니다. (서버의 환경변수 보호)
-COPYFILE_DISABLE=1 tar -czf $TEMP_ARCHIVE --exclude='.env' --exclude='node_modules' --exclude='.git' --exclude='.DS_Store' --exclude='server.log' --exclude='public/screenshots/*' --no-xattrs .
+COPYFILE_DISABLE=1 tar -czf $TEMP_ARCHIVE --exclude='.env' --exclude='node_modules' --exclude='.git' --exclude='.DS_Store' --exclude='server.log' --exclude='public/screenshots/*' --exclude='deploy.sh' --exclude='deploy.js' --no-xattrs .
 
 # 2. 파일 전송
 echo "📤 서버로 파일 전송 중 ($SERVER)..."
@@ -35,6 +35,10 @@ ssh $SERVER "
     mkdir -p $REMOTE_DIR
     mkdir -p $REMOTE_DIR/public/screenshots
 
+    # 압축 해제 전 소스 코드 정리 (node_modules, .env, screenshots 제외)
+    echo '🧹 기존 소스 코드 정리 중...'
+    find $REMOTE_DIR -maxdepth 1 -type f ! -name ".env" -delete
+    
     # 압축 해제
     echo '📂 압축 해제 중...'
     tar -xzf /tmp/$TEMP_ARCHIVE -C $REMOTE_DIR
@@ -54,18 +58,28 @@ ssh $SERVER "
     echo '📦 의존성 패키지 설치 중 (npm install)...'
     npm install --omit=dev
 
+    # Playwright 브라우저 설치 (x86 아키텍처에 맞는 바이너리 보장)
+    echo '🌐 Playwright 브라우저 확인 및 설치...'
+    npx playwright install chromium
+
     echo '✅ 배포 준비 완료!'
     
-    # PM2 관리
+    # PM2 관리 및 설치
+    if ! command -v pm2 &> /dev/null; then
+        echo '⚠️  PM2가 설치되어 있지 않습니다. 설치를 시도합니다...'
+        npm install -g pm2
+    fi
+
     if command -v pm2 &> /dev/null; then
         echo '🔄 PM2 프로세스 재시작 중...'
+        # 기존 프로세스가 있으면 reload, 없으면 start
         pm2 reload marine-server 2>/dev/null || pm2 start server.js --name 'marine-server'
         pm2 save
         
         echo '📊 현재 PM2 서비스 상태:'
         pm2 show marine-server
     else
-        echo '⚠️  PM2가 설치되어 있지 않습니다.'
+        echo '❌ PM2 설치 실패. 수동 확인이 필요합니다.'
     fi
 "
 

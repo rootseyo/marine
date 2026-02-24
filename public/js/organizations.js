@@ -61,6 +61,7 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
             const allSites = sitesData.sites || [];
             orgSites = allSites.filter(s => s.scraped_data && s.scraped_data.sdk_verified);
             let pendingSites = allSites.filter(s => !s.scraped_data || !s.scraped_data.sdk_verified);
+            pendingSites = pendingSites.filter(s => s.scraped_data?.script_detected);
             
             const seenManagedOrigins = new Set();
             orgSites.forEach(s => {
@@ -140,17 +141,58 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
 
             if (pendingSites.length > 0) {
                 html += `
-                    <div class="mb-5 p-3 bg-white rounded border border-dashed border-secondary">
-                        <h6 class="fw-bold text-secondary mb-3 small"><i class="fas fa-hourglass-half me-2"></i> 등록됨 (스크립트 신호 대기 중)</h6>
-                        <div class="d-flex flex-wrap gap-2">
+                    <div class="mb-5 p-3 bg-white rounded border shadow-sm">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-bold text-success mb-0 small">
+                                <i class="fas fa-check-double me-1"></i> 신호 승인 대기 중
+                            </h6>
+                            <span class="badge bg-light text-success border fw-normal extra-small">
+                                ${pendingSites.length}개의 신호 감지됨
+                            </span>
+                        </div>
+                        
+                        <div class="list-group list-group-flush border-top border-bottom">
                             ${pendingSites.map(s => `
-                                <span class="badge bg-white text-secondary border p-2">
-                                    ${s.url} <i class="fas fa-spinner fa-spin ms-1 opacity-50"></i>
-                                </span>
+                                <div class="list-group-item d-flex justify-content-between align-items-center px-0 py-2 border-light">
+                                    <div class="d-flex align-items-center overflow-hidden">
+                                        <span class="status-dot bg-success me-2"></span>
+                                        <span class="text-dark fw-bold small text-truncate">${s.url}</span>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button class="btn btn-xs btn-outline-danger py-1 px-2" onclick="rejectSite('${s.id}')">
+                                            거절
+                                        </button>
+                                        <button class="btn btn-xs btn-success py-1 px-3 shadow-sm" onclick="approveSite('${s.id}')">
+                                            승인 및 분석 시작
+                                        </button>
+                                    </div>
+                                </div>
                             `).join('')}
                         </div>
+                        
+                        <p class="text-muted extra-small mt-2 mb-0">
+                            <i class="fas fa-info-circle me-1"></i> 설치된 스크립트로부터 신호가 확인되었습니다. 승인 버튼을 누르면 AI 분석이 즉시 시작됩니다.
+                        </p>
                     </div>
                 `;
+            }
+
+            // CSS 추가
+            if (!document.getElementById('custom-sdk-styles')) {
+                const style = document.createElement('style');
+                style.id = 'custom-sdk-styles';
+                style.innerHTML = `
+                    .extra-small { font-size: 0.7rem; }
+                    .btn-xs { padding: 0.2rem 0.5rem; font-size: 0.75rem; border-radius: 0.2rem; }
+                    .status-dot {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 50%;
+                        display: inline-block;
+                        flex-shrink: 0;
+                    }
+                `;
+                document.head.appendChild(style);
             }
 
             html += `
@@ -329,5 +371,37 @@ function refreshOrgSelection() {
     const select = document.getElementById('orgSelect');
     if (select && select.value) {
         triggerOrgSelection(select.value, select.options[select.selectedIndex].text, select.options[select.selectedIndex].dataset.publicId);
+    }
+}
+
+async function approveSite(siteId) {
+    if (!confirm("이 사이트의 SDK 연결을 최종 승인하시겠습니까? 승인 후 마케팅 자동화 기능이 활성화됩니다.")) return;
+    try {
+        const res = await fetch(`/api/sites/${siteId}/approve`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            alert("사이트 연결이 승인되었습니다!");
+            refreshOrgSelection();
+        } else {
+            alert(data.error || "승인 실패");
+        }
+    } catch (err) {
+        alert("서버 오류가 발생했습니다.");
+    }
+}
+
+async function rejectSite(siteId) {
+    if (!confirm("이 사이트의 승인을 거절하시겠습니까? 목록에서 제거되며 더 이상 나타나지 않습니다.")) return;
+    try {
+        const res = await fetch(`/api/sites/${siteId}/reject`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            alert("승인이 거절되었습니다.");
+            refreshOrgSelection();
+        } else {
+            alert(data.error || "거절 실패");
+        }
+    } catch (err) {
+        alert("서버 오류가 발생했습니다.");
     }
 }

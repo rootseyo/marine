@@ -239,7 +239,7 @@ async function runAutoPilotOptimization(siteId) {
 
         if (aiResult) {
             await client.query(
-                "UPDATE sites SET scraped_data = jsonb_set(scraped_data, '{automation}', $1::jsonb) WHERE id = $2",
+                "UPDATE sites SET scraped_data = jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{automation}', $1::jsonb) WHERE id = $2",
                 [JSON.stringify(aiResult), siteId]
             );
             console.log(`[Auto-Pilot] Successfully updated automation config for ${site.url}`);
@@ -259,22 +259,27 @@ app.post('/api/v1/learning/signal', async (req, res) => {
     const client = await pool.connect();
     try {
         // [Senior Strategy] 행동 로그를 최신 50개까지만 유지하여 DB 부하를 방지하면서 학습 데이터를 확보합니다.
+        // script_detected도 함께 true로 업데이트하여 설치 확인을 보장합니다.
         const updateQuery = `
             UPDATE sites 
             SET scraped_data = jsonb_set(
                 jsonb_set(
                     jsonb_set(
-                        scraped_data, 
-                        '{event_count}', 
-                        (COALESCE((scraped_data->>'event_count')::int, 0) + 1)::text::jsonb
+                        jsonb_set(
+                            COALESCE(scraped_data, '{}'::jsonb), 
+                            '{event_count}', 
+                            (COALESCE((scraped_data->>'event_count')::int, 0) + 1)::text::jsonb
+                        ),
+                        '{learning_progress}', 
+                        (
+                            CASE 
+                                WHEN (scraped_data->>'learning_progress')::int >= 100 THEN '100'
+                                ELSE LEAST(25 + (COALESCE((scraped_data->>'event_count')::int, 0) / 20.0), 100)::int::text
+                            END
+                        )::jsonb
                     ),
-                    '{learning_progress}', 
-                    (
-                        CASE 
-                            WHEN (scraped_data->>'learning_progress')::int >= 100 THEN '100'
-                            ELSE LEAST(25 + (COALESCE((scraped_data->>'event_count')::int, 0) / 20.0), 100)::int::text
-                        END
-                    )::jsonb
+                    '{script_detected}',
+                    'true'::jsonb
                 ),
                 '{behavior_logs}',
                 (
@@ -312,7 +317,7 @@ app.post('/api/v1/learning/signal', async (req, res) => {
                     const resetClient = await pool.connect();
                     try {
                         await resetClient.query(
-                            "UPDATE sites SET scraped_data = jsonb_set(jsonb_set(scraped_data, '{learning_progress}', '25'::jsonb), '{event_count}', '0'::jsonb) WHERE id = $1",
+                            "UPDATE sites SET scraped_data = jsonb_set(jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{learning_progress}', '25'::jsonb), '{event_count}', '0'::jsonb) WHERE id = $1",
                             [id]
                         );
                     } finally {
@@ -349,14 +354,17 @@ app.get('/sdk.js', async (req, res) => {
             }
 
             const referer = req.get('referer');
+            console.log(`[SDK] Request for Org: ${resolvedOrgId}, Referer: ${referer}`);
             if (referer) {
                 try {
                     const urlObj = new URL(referer);
-                    const hostname = urlObj.hostname;
+                    const domain = urlObj.origin.toLowerCase();
+                    const domainWithoutProtocol = domain.replace(/^https?:\/\//, '');
                     
+                    // 프로토콜(http/https) 및 트레일링 슬래시 여부에 상관없이 도메인이 같으면 매칭되도록 개선
                     const result = await client.query(
-                        "SELECT * FROM sites WHERE organization_id = $1 AND (url ILIKE $2 OR url ILIKE $3) LIMIT 1",
-                        [resolvedOrgId, `%${hostname}%`, `%${urlObj.host}%`]
+                        "SELECT * FROM sites WHERE organization_id = $1 AND (url ILIKE $2 OR url ILIKE $3 OR url ILIKE $4 OR url ILIKE $5) AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at') LIMIT 1",
+                        [resolvedOrgId, `%://${domainWithoutProtocol}`, `%://${domainWithoutProtocol}/`, domainWithoutProtocol, `${domainWithoutProtocol}/`]
                     );
                     site = result.rows[0];
                 } catch (e) {
@@ -371,25 +379,32 @@ app.get('/sdk.js', async (req, res) => {
         }
 
         if (site) {
-            // Mark as SDK verified if not already marked
-            if (!site.scraped_data.sdk_verified) {
+            // 마케팅 자동화 기능은 승인(sdk_verified)된 경우에만 작동하지만, 
+            // 스크립트가 설치되었음(script_detected)은 항상 기록하여 관리자가 승인할 수 있게 함
+            const siteData = site.scraped_data || {};
+            if (!siteData.sdk_verified && !siteData.script_detected) {
                 await client.query(
-                    "UPDATE sites SET scraped_data = scraped_data || '{\"sdk_verified\": true, \"status\": \"active\"}'::jsonb WHERE id = $1",
+                    "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"script_detected\": true}'::jsonb WHERE id = $1",
                     [site.id]
                 );
-                console.log(`[SDK] Site ${site.url} verified (SDK signal received)`);
+                console.log(`[SDK] Script signal received for registered site: ${site.url}`);
+                // 최신 상태를 반영하기 위해 객체 업데이트
+                if (!site.scraped_data) site.scraped_data = {};
+                site.scraped_data.script_detected = true;
             }
         } else {
             const ref = req.get('referer');
             if (ref && resolvedOrgId) {
                 try {
                     const urlObj = new URL(ref);
-                    const domain = urlObj.origin;
+                    const domain = urlObj.origin.toLowerCase();
+                    const domainWithoutProtocol = domain.replace(/^https?:\/\//, '');
                     
                     // DB에서 이미 탐지되었거나 등록되었는지 확인
+                    // URL 정규화를 위해 다양한 패턴으로 검색
                     const checkRes = await client.query(
-                        "SELECT id FROM sites WHERE organization_id = $1 AND url = $2",
-                        [resolvedOrgId, domain]
+                        "SELECT id, scraped_data FROM sites WHERE organization_id = $1 AND (url ILIKE $2 OR url ILIKE $3 OR url ILIKE $4 OR url ILIKE $5)",
+                        [resolvedOrgId, domain, `${domain}/`, domainWithoutProtocol, `${domainWithoutProtocol}/`]
                     );
 
                     if (checkRes.rows.length === 0) {
@@ -399,18 +414,36 @@ app.get('/sdk.js', async (req, res) => {
                             [resolvedOrgId, domain, apiKey, 0, { 
                                 status: 'discovered', 
                                 discovered_at: new Date().toISOString(),
-                                sdk_verified: true 
+                                sdk_verified: false,
+                                script_detected: true
                             }]
                         );
-                        console.log(`[Discovery] New site automatically discovered: ${domain} for Org ${resolvedOrgId}`);
+                        console.log(`[Discovery] New site automatically discovered (Pending Approval): ${domain} for Org ${resolvedOrgId}`);
+                    } else {
+                        // 기존에 수동으로 등록되었거나 이미 발견된 사이트인 경우, 스크립트 신호 감지 업데이트
+                        const siteId = checkRes.rows[0].id;
+                        const siteData = checkRes.rows[0].scraped_data || {};
+                        
+                        // [Strict Admin Approval] 삭제되지 않은 사이트에 대해서만 설치 신호를 기록합니다.
+                        // 승인(sdk_verified)은 오직 관리자가 버튼을 눌러야만 처리됩니다.
+                        if (!siteData.script_detected && !siteData.deleted_at) {
+                            await client.query(
+                                "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"script_detected\": true}'::jsonb WHERE id = $1",
+                                [siteId]
+                            );
+                            console.log(`[SDK] Script signal detected for pending site: ${domain}`);
+                        }
                     }
                 } catch (e) {
                     console.error("[Discovery] Error saving to DB:", e);
                 }
             }
             const refLog = ref || 'unknown';
-            return res.send(`// BrightNetworks SDK: Site discovery recorded for ${refLog}. Analysis will start shortly.`);
+            res.set('Content-Type', 'application/javascript');
+            return res.send(`console.log('BrightNetworks SDK: Site discovery recorded for ${refLog}. Waiting for admin approval.');`);
         }
+        
+        const isVerified = (site.scraped_data || {}).sdk_verified === true;
         
         const defaults = {
             social_proof: { enabled: true, template: "{location} {customer}님이 {product}를 방금 구매했습니다!" },
@@ -421,18 +454,36 @@ app.get('/sdk.js', async (req, res) => {
             inactivity_nudge: { enabled: true, idle_seconds: 30, text: "혹시 더 궁금한 점이 있으신가요? {customer}님만을 위한 가이드를 확인해보세요!" }
         };
 
-        const config = {
+        // 승인된 사이트인 경우만 마케팅 설정을 로드하고, 아니면 모든 위젯을 비활성화(empty) 처리
+        const config = isVerified ? {
             ...defaults,
-            ...(site.scraped_data.automation || {})
+            ...((site.scraped_data || {}).automation || {})
+        } : {
+            social_proof: { enabled: false },
+            exit_intent: { enabled: false },
+            shipping_timer: { enabled: false },
+            scroll_reward: { enabled: false },
+            rental_calc: { enabled: false },
+            inactivity_nudge: { enabled: false },
+            tab_recovery: { enabled: false },
+            price_match: { enabled: false }
         };
 
                 // Generate dynamic JS
+                const apiBase = `${req.protocol}://${req.get('host')}`;
                 const sdkCode = `
             (function() {
                 const config = ${JSON.stringify(config)};
-                const siteData = ${JSON.stringify(site.scraped_data)};
+                const siteData = ${JSON.stringify(site.scraped_data || {})};
                 const API_KEY = '${site.api_key}';
-                console.log('Brightnetworks Intelligence SDK Loaded');
+                const isVerified = ${isVerified};
+                const API_BASE = '${apiBase}';
+                const SITE_URL = '${site.url}';
+                
+                console.log('Brightnetworks Intelligence SDK Loaded for ' + SITE_URL);
+                if (!isVerified) {
+                    console.log('SDK: Connection established for ' + SITE_URL + '. Waiting for admin approval.');
+                }
             
                 const LearningEngine = {
                     scrollMarkers: new Set(),
@@ -451,10 +502,11 @@ app.get('/sdk.js', async (req, res) => {
                             timestamp: new Date().toISOString()
                         });
             
+                        const signalUrl = API_BASE + '/api/v1/learning/signal';
                         if (navigator.sendBeacon) {
-                            navigator.sendBeacon('/api/v1/learning/signal', data);
+                            navigator.sendBeacon(signalUrl, data);
                         } else {
-                            fetch('/api/v1/learning/signal', { 
+                            fetch(signalUrl, { 
                                 method: 'POST', 
                                 headers: { 'Content-Type': 'application/json' },
                                 body: data, 
@@ -676,7 +728,7 @@ app.post('/api/sites/:id/automation', isAuthenticated, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query(
-            "UPDATE sites SET scraped_data = scraped_data || jsonb_build_object('automation', $1::jsonb) WHERE id = $2",
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || jsonb_build_object('automation', $1::jsonb) WHERE id = $2",
             [config, id]
         );
         res.json({ success: true });
@@ -822,12 +874,12 @@ app.post('/api/organizations/:id/discoveries/clear', isAuthenticated, async (req
     try {
         if (url) {
             await client.query(
-                "UPDATE sites SET scraped_data = scraped_data || '{\"status\": \"cleared\"}'::jsonb WHERE organization_id = $1 AND url = $2",
+                "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"cleared\"}'::jsonb WHERE organization_id = $1 AND url = $2",
                 [orgId, url]
             );
         } else {
             await client.query(
-                "UPDATE sites SET scraped_data = scraped_data || '{\"status\": \"cleared\"}'::jsonb WHERE organization_id = $1 AND (scraped_data->>'status' = 'discovered')",
+                "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"cleared\"}'::jsonb WHERE organization_id = $1 AND (scraped_data->>'status' = 'discovered')",
                 [orgId]
             );
         }
@@ -928,9 +980,9 @@ app.get('/api/sites', isAuthenticated, async (req, res) => {
 
     const client = await pool.connect();
     try {
-        // Filter out deleted sites using JSONB flag
+        // [Filter] 삭제된 사이트('deleted_at')와 거절된 사이트('rejected')를 모두 제외합니다.
         const result = await client.query(
-            "SELECT * FROM sites WHERE organization_id = $1 AND NOT (scraped_data ? 'deleted_at') ORDER BY created_at DESC", 
+            "SELECT * FROM sites WHERE organization_id = $1 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at') AND (scraped_data->>'status' IS NULL OR scraped_data->>'status' != 'rejected') ORDER BY created_at DESC", 
             [organization_id]
         );
         res.json({ sites: result.rows });
@@ -1018,26 +1070,32 @@ async function scrapeUrl(url) {
     try {
         console.log(`[Playwright] Launching browser for: ${url}`);
         browser = await chromium.launch({ 
-            headless: false,
-            slowMo: 50
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu'
+            ]
         });
         const context = await browser.newContext({
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
             viewport: { width: 1280, height: 800 },
-            ignoreHTTPSErrors: true // 로컬 테스트 및 자가서명 인증서 허용
+            ignoreHTTPSErrors: true
         });
         const page = await context.newPage();
         
         console.log(`[Playwright] Navigation started...`);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        // Use 'networkidle' for more complete content capture, but with a reasonable timeout
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
         console.log(`[Playwright] Page loaded. Waiting for stability...`);
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(3000);
 
         // Take Screenshot
         const screenshotName = `screenshot_${Date.now()}_${Math.random().toString(36).substring(7)}.png`;
         const screenshotPath = path.join(__dirname, 'public', 'screenshots', screenshotName);
         console.log(`[Playwright] Taking screenshot: ${screenshotName}`);
-        await page.screenshot({ path: screenshotPath, fullPage: false }); // Partial page is faster and often enough for preview
+        await page.screenshot({ path: screenshotPath, fullPage: false }); 
 
         console.log(`[Playwright] Extracting SEO data...`);
         const seoData = await page.evaluate(() => {
@@ -1067,8 +1125,14 @@ async function scrapeUrl(url) {
         const contentHtml = await page.content();
         const markdown = turndownService.turndown(contentHtml).trim().substring(0, 20000);
         return { seoData, markdown, screenshotName };
+    } catch (err) {
+        console.error(`[Playwright] Scrape failed for ${url}:`, err);
+        throw err; // Re-throw to be handled by caller
     } finally {
-        if (browser) await browser.close();
+        if (browser) {
+            console.log(`[Playwright] Closing browser for: ${url}`);
+            await browser.close();
+        }
     }
 }
 
@@ -1148,7 +1212,7 @@ async function processSiteAnalysis(siteId) {
 
         // Update site with results, applying AI automation recommendations
         await client.query(
-            "UPDATE sites SET seo_score = $1, scraped_data = scraped_data || $2::jsonb WHERE id = $3",
+            "UPDATE sites SET seo_score = $1, scraped_data = COALESCE(scraped_data, '{}'::jsonb) || $2::jsonb WHERE id = $3",
             [
                 aiResult.seo_score || 0, 
                 JSON.stringify({ 
@@ -1169,7 +1233,7 @@ async function processSiteAnalysis(siteId) {
     } catch (err) {
         console.error(`[Auto-Analysis] Failed for Site ${siteId}:`, err);
         await client.query(
-            "UPDATE sites SET scraped_data = scraped_data || '{\"status\": \"error\", \"analysis_error\": \"Failed to process\"}'::jsonb WHERE id = $1",
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"error\", \"analysis_error\": \"Failed to process\"}'::jsonb WHERE id = $1",
             [siteId]
         );
     } finally {
@@ -1274,6 +1338,43 @@ app.post('/api/sites', isAuthenticated, async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// 5. Approve Site (SDK Verification)
+app.post('/api/sites/:id/approve', isAuthenticated, async (req, res) => {
+    const siteId = parseInt(req.params.id);
+    const client = await pool.connect();
+    try {
+        await client.query(
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"sdk_verified\": true, \"status\": \"active\"}'::jsonb WHERE id = $1",
+            [siteId]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Database error" });
+    } finally {
+        client.release();
+    }
+});
+
+// 6. Reject Site
+app.post('/api/sites/:id/reject', isAuthenticated, async (req, res) => {
+    const siteId = parseInt(req.params.id);
+    const client = await pool.connect();
+    try {
+        // [Reject Logic] 승인 거부 시 상태를 'rejected'로 변경하고 대시보드에서 숨깁니다.
+        await client.query(
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"rejected\", \"rejected_at\": \"' || CURRENT_TIMESTAMP || '\"}'::jsonb WHERE id = $1",
+            [siteId]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Database error" });
     } finally {
         client.release();
     }
