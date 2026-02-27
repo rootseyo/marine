@@ -13,7 +13,7 @@ echo "=========================================="
 # 1. 프로젝트 압축
 echo "📦 소스 코드 압축 중..."
 # .env 파일은 제외하고 압축합니다. (서버의 환경변수 보호)
-COPYFILE_DISABLE=1 tar -czf $TEMP_ARCHIVE --exclude='.env' --exclude='node_modules' --exclude='.git' --exclude='.DS_Store' --exclude='server.log' --exclude='public/screenshots/*' --exclude='deploy.sh' --exclude='deploy.js' --no-xattrs .
+COPYFILE_DISABLE=1 tar -czf $TEMP_ARCHIVE --exclude=$TEMP_ARCHIVE --exclude='.env' --exclude='node_modules' --exclude='.git' --exclude='.DS_Store' --exclude='server.log' --exclude='public/screenshots/*' --exclude='deploy.sh' --exclude='deploy.js' --no-xattrs .
 
 # 2. 파일 전송
 echo "📤 서버로 파일 전송 중 ($SERVER)..."
@@ -84,5 +84,5 @@ ssh $SERVER "
 "
 
 echo "=========================================="
-echo "🎉 Marine 배포 완료 (포트: 8090)"
+echo "🎉 Marine 배포 완료 (포트: 8080)"
 echo "=========================================="

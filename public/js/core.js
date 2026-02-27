@@ -107,6 +107,12 @@ async function checkAuth() {
 
 // Global UI Section Control
 function showSection(sectionId) {
+    // Stop automation refresh if moving away from automation section
+    if (sectionId !== 'sectionAutomation' && typeof automationRefreshInterval !== 'undefined' && automationRefreshInterval) {
+        clearInterval(automationRefreshInterval);
+        automationRefreshInterval = null;
+    }
+
     document.querySelectorAll('.content-section').forEach(sec => {
         sec.classList.add('hidden');
     });
@@ -148,9 +154,10 @@ function showSection(sectionId) {
 
 // Global Usage / Plan Logic
 async function loadUsage() {
-    if (!currentOrgId) return;
+    const orgParam = currentPublicId || currentOrgId;
+    if (!orgParam) return;
     try {
-        const res = await fetch(`/api/usage?organization_id=${currentOrgId}`);
+        const res = await fetch(`/api/usage?organization_id=${orgParam}`);
         const data = await res.json();
         
         const remaining = data.limit - data.used;
@@ -179,12 +186,13 @@ async function loadUsage() {
 }
 
 async function debugSetPlan(plan) {
-    if (!currentOrgId) return alert("조직을 먼저 선택해주세요.");
+    const orgParam = currentPublicId || currentOrgId;
+    if (!orgParam) return alert("조직을 먼저 선택해주세요.");
     try {
         const res = await fetch('/api/debug/set-plan', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ organization_id: currentOrgId, plan })
+            body: JSON.stringify({ organization_id: orgParam, plan })
         });
         const data = await res.json();
         if (data.success) {

@@ -6,9 +6,10 @@ let reportSites = [];
 let scoreChart = null;
 
 async function loadReportHistory() {
-    if (!currentOrgId) return;
+    const orgParam = currentPublicId || currentOrgId;
+    if (!orgParam) return;
     try {
-        const res = await fetch(`/api/sites?organization_id=${currentOrgId}`);
+        const res = await fetch(`/api/sites?organization_id=${orgParam}`);
         const data = await res.json();
         reportSites = data.sites || [];
         renderReportHistory();

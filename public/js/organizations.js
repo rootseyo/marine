@@ -206,6 +206,9 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
             scriptList.innerHTML = html;
             if (orgSites.length > 0) renderOrgSitesTable();
             if (window.hljs) scriptList.querySelectorAll('code').forEach(block => hljs.highlightElement(block));
+            
+            // 휴지통 목록도 함께 동기화
+            if (typeof loadTrash === 'function') loadTrash();
         } catch (err) {
             scriptList.innerHTML = '<div class="text-danger small">데이터를 불러오는 중 오류가 발생했습니다.</div>';
         }
@@ -280,7 +283,8 @@ async function deleteSiteFromOrg(siteId, url) {
         
         if (data.success) {
             alert("도메인 연결이 해제되었습니다.");
-            refreshOrgSelection(); // 현재 조직 정보 다시 불러오기
+            refreshOrgSelection(); // 활성 목록 새로고침
+            if (typeof loadTrash === 'function') loadTrash(); // 휴지통 즉시 업데이트
             if (typeof loadUsage === 'function') loadUsage(); // 사용량 업데이트
         } else {
             alert(data.error || "해제 실패");
@@ -331,7 +335,7 @@ async function loadMembers() {
 async function loadTrash() {
     if (!currentOrgId) return;
     try {
-        const res = await fetch(`/api/sites/trash?organization_id=${currentOrgId}`);
+        const res = await fetch(`/api/sites/trash?organization_id=${currentPublicId || currentOrgId}`);
         const data = await res.json();
         const list = document.getElementById('trashList');
         if (!list) return;
@@ -339,14 +343,49 @@ async function loadTrash() {
             list.innerHTML = '<tr><td colspan="3" class="text-center py-3">휴지통이 비어 있습니다.</td></tr>';
             return;
         }
-        list.innerHTML = data.sites.map(site => `<tr><td>${site.url}</td><td>${site.scraped_data?.deleted_at ? new Date(site.scraped_data.deleted_at).toLocaleString() : '알 수 없음'}</td><td><button class="btn btn-sm btn-success" onclick="restoreSite('${site.id}')">복구</button></td></tr>`).join('');
+        list.innerHTML = data.sites.map(site => `
+            <tr>
+                <td>${site.url}</td>
+                <td>${site.scraped_data?.deleted_at ? new Date(site.scraped_data.deleted_at).toLocaleString() : '알 수 없음'}</td>
+                <td>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-sm btn-success" onclick="restoreSite('${site.id}')">복구</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="permanentDeleteSite('${site.id}', '${site.url}')">완전 삭제</button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
     } catch (err) {}
+}
+
+async function permanentDeleteSite(siteId, url) {
+    if (!confirm(`'${url}' 도메인의 모든 데이터(분석 결과, 자동화 설정 등)가 영구적으로 삭제되며 복구할 수 없습니다.\n정말 삭제하시겠습니까?`)) return;
+
+    try {
+        const res = await fetch(`/api/sites/${siteId}/permanent`, {
+            method: 'DELETE'
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+            alert("영구 삭제가 완료되었습니다.");
+            loadTrash(); // 목록 새로고침
+        } else {
+            alert(data.error || "삭제 실패");
+        }
+    } catch (err) {
+        console.error("Permanent delete failed", err);
+        alert("서버 오류가 발생했습니다.");
+    }
 }
 
 async function restoreSite(siteId) {
     try {
         const res = await fetch(`/api/sites/restore/${siteId}`, { method: 'POST' });
-        if (res.ok) loadTrash();
+        if (res.ok) {
+            if (typeof loadTrash === 'function') loadTrash(); // 휴지통에서 즉시 제거
+            refreshOrgSelection(); // 활성 목록에 즉시 복구
+        }
     } catch (err) {}
 }
 

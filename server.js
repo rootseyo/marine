@@ -44,7 +44,19 @@ turndownService.remove(['script', 'style', 'noscript', 'iframe', 'nav', 'footer'
 
 // --- Middleware ---
 app.use(cors({ origin: true, credentials: true }));
-app.use(bodyParser.json());
+app.use(bodyParser.json({ type: ['application/json', 'text/plain'] }));
+
+app.use((req, res, next) => {
+    const origin = req.get('Origin') || 'Local/Same-Origin';
+    if (req.url.includes('signal') || req.url.includes('ping')) {
+        const bodyStr = req.body ? JSON.stringify(req.body) : '';
+        console.log(`[Request DEBUG] ${req.method} ${req.url} - Origin: ${origin}, Body: ${bodyStr.substring(0, 100)}...`);
+    } else {
+        console.log(`[Request] ${req.method} ${req.url} - Origin: ${origin}`);
+    }
+    next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(session({
     store: new pgSession({
@@ -168,6 +180,8 @@ app.get('/automation', isAuthenticated, (req, res) => res.sendFile(path.join(__d
 app.get('/subscription', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
 
 // 1. Auth Routes
+app.get('/api/ping', (req, res) => res.json({ status: 'ok', version: '25.2.26.2', timestamp: new Date().toISOString() }));
+
 app.get('/api/auth/google', passport.authenticate('google', { 
     scope: ['profile', 'email'],
     prompt: 'select_account' 
@@ -206,32 +220,48 @@ async function runAutoPilotOptimization(siteId) {
 
         console.log(`[Auto-Pilot] Analyzing behavior data for: ${site.url}`);
 
+        // [Senior Strategy] Summarize logs to save tokens and focus on patterns
+        const summary = {
+            total_events: logs.length,
+            paths: {},
+            clicks: [],
+            types: {}
+        };
+        logs.forEach(l => {
+            summary.types[l.type] = (summary.types[l.type] || 0) + 1;
+            summary.paths[l.path] = (summary.paths[l.path] || 0) + 1;
+            if (l.type === 'click_interaction' && l.meta?.text) summary.clicks.push(l.meta.text);
+        });
+
         const prompt = `
-            당신은 시니어 퍼포먼스 마케터이자 데이터 분석가입니다.
-            고객 사이트의 실시간 행동 로그를 분석하여, 전환율을 극대화할 수 있도록 현재의 '마케팅 자동화 설정'을 변경(업데이트)하세요.
+            당신은 시니어 퍼포먼스 마케터입니다. 아래의 고객 행동 패턴 데이터를 분석하여 전환율을 높일 수 있도록 현재의 '마케팅 자동화 설정'을 최적화하세요.
+            
+            분석 대상 사이트: ${site.url}
+            최근 방문 패턴(Top 3 Paths): ${JSON.stringify(Object.entries(summary.paths).sort((a,b)=>b[1]-a[1]).slice(0,3))}
+            주요 클릭 요소: ${summary.clicks.slice(0,10).join(', ')}
+            이벤트 분포: ${JSON.stringify(summary.types)}
+            
+            기존 설정: ${JSON.stringify(site.scraped_data.automation)}
 
-            --- 최근 고객 행동 로그 요약 ---
-            ${JSON.stringify(logs.slice(0, 30))}
-            
-            --- 현재 마케팅 설정 ---
-            ${JSON.stringify(site.scraped_data.automation)}
-            
             --- 분석 및 최적화 지침 ---
-            1. 행동 로그에서 '스크롤(scroll_depth)' 이탈이 잦은 구간을 찾아 스크롤 보상 위젯의 노출 조건(depth)을 앞으로 당기세요 (예: 80% -> 50%).
-            2. 고객들이 많이 누르는 버튼의 텍스트(click_interaction)를 참고하여, 이탈 방지 팝업(exit_intent)이나 무반응 넛지(inactivity_nudge)의 문구를 고객이 흥미를 가질 만한 단어로 수정하세요.
-            3. 응답은 반드시 업데이트된 마케팅 설정 전체를 포함하는 JSON 형식이어야 합니다. 기존의 ai_auto_optimize 키는 true로 유지하세요.
+            1. '스크롤(scroll_depth)' 이탈이 잦은 경우 보상 위젯의 노출 조건(depth)을 조정하세요.
+            2. 클릭 요소나 페이지 경로를 참고하여, 이탈 방지나 넛지 문구를 해당 관심사에 맞게 개인화하세요.
+            3. 분석 결과는 반드시 아래 JSON 구조를 지켜야 하며, 한국어로 친절하고 전문적인 마케터의 어조로 'ai_opinion'을 작성하세요.
+            4. 'ai_opinion'에는 어떤 경로에서 이탈이 많은지, 어떤 마케팅 설정을 강화하면 좋을지 구체적인 수치나 경로명을 언급하며 조언을 포함하세요.
 
-            --- 응답 JSON 구조 (필수 포함) ---
+            --- 응답 JSON 구조 (반드시 이 구조로만 응답하세요) ---
             {
-                "ai_auto_optimize": true,
-                "social_proof": { "enabled": true, "template": "...", "conversion": "..." },
-                "exit_intent": { "enabled": true, "text": "...", "conversion": "..." },
-                "shipping_timer": { "enabled": true, "closing_hour": 16, "text": "...", "conversion": "..." },
-                "scroll_reward": { "enabled": true, "depth": 50, "text": "...", "coupon": "...", "conversion": "..." },
-                "rental_calc": { "enabled": true, "period": 24, "text": "...", "conversion": "..." },
-                "inactivity_nudge": { "enabled": true, "idle_seconds": 20, "text": "...", "conversion": "..." },
-                "tab_recovery": { "enabled": true, "text": "...", "conversion": "..." },
-                "price_match": { "enabled": true, "text": "...", "conversion": "..." }
+                "automation": {
+                    "social_proof": { "enabled": true, "template": "...", "conversion": "..." },
+                    "exit_intent": { "enabled": true, "text": "...", "conversion": "..." },
+                    "shipping_timer": { "enabled": true, "closing_hour": 16, "text": "...", "conversion": "..." },
+                    "scroll_reward": { "enabled": true, "depth": 50, "text": "...", "coupon": "...", "conversion": "..." },
+                    "rental_calc": { "enabled": true, "period": 24, "text": "...", "conversion": "..." },
+                    "inactivity_nudge": { "enabled": true, "idle_seconds": 20, "text": "...", "conversion": "..." },
+                    "tab_recovery": { "enabled": true, "text": "...", "conversion": "..." },
+                    "price_match": { "enabled": true, "text": "...", "conversion": "..." }
+                },
+                "ai_opinion": "여기에 시니어 마케터의 분석 의견을 작성하세요."
             }
         `;
 
@@ -267,12 +297,22 @@ async function runAutoPilotOptimization(siteId) {
         const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
         if (jsonMatch) aiResult = JSON.parse(jsonMatch[0]);
 
-        if (aiResult) {
-            await client.query(
-                "UPDATE sites SET scraped_data = jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{automation}', $1::jsonb) WHERE id = $2",
-                [JSON.stringify(aiResult), siteId]
-            );
-            console.log(`[Auto-Pilot] Successfully updated automation config for ${site.url}`);
+        if (aiResult && aiResult.automation) {
+            // Always update opinion, but only update automation config if auto-pilot is ON
+            const isAutoPilotOn = site.scraped_data.automation?.ai_auto_optimize === true;
+            
+            if (isAutoPilotOn) {
+                await client.query(
+                    "UPDATE sites SET scraped_data = jsonb_set(jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{automation}', $1::jsonb), '{ai_opinion}', $2::jsonb) WHERE id = $3",
+                    [JSON.stringify(aiResult.automation), JSON.stringify(aiResult.ai_opinion), siteId]
+                );
+            } else {
+                await client.query(
+                    "UPDATE sites SET scraped_data = jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{ai_opinion}', $1::jsonb) WHERE id = $2",
+                    [JSON.stringify(aiResult.ai_opinion), siteId]
+                );
+            }
+            console.log(`[Auto-Pilot] Successfully updated AI opinion (and automation: ${isAutoPilotOn}) for ${site.url}`);
         }
     } catch (err) {
         console.error(`[Auto-Pilot] Failed for Site ${siteId}:`, err);
@@ -282,79 +322,102 @@ async function runAutoPilotOptimization(siteId) {
 }
 
 app.post('/api/v1/learning/signal', async (req, res) => {
-    // SDK에서 보내는 정밀 행동 데이터를 처리합니다.
     const { api_key, event_type, path, referrer, metadata } = req.body;
-    if (!api_key) return res.status(400).end();
+    if (!api_key) return res.status(400).json({ error: "Missing API Key" });
 
     const client = await pool.connect();
     try {
-        // [Senior Strategy] 행동 로그를 최신 50개까지만 유지하여 DB 부하를 방지하면서 학습 데이터를 확보합니다.
-        // script_detected도 함께 true로 업데이트하여 설치 확인을 보장합니다.
-        const updateQuery = `
+        // [Modern Strategy] Use a more robust way to append to jsonb array and maintain limit
+        // 1. First, get current data to ensure we have an array
+        const siteRes = await client.query("SELECT id, scraped_data FROM sites WHERE api_key = $1", [api_key]);
+        if (siteRes.rowCount === 0) {
+            console.warn(`[Intelligence] Site not found for API Key: ${api_key}`);
+            return res.status(404).json({ error: "Site not found", received_key: api_key });
+        }
+
+        const siteId = siteRes.rows[0].id;
+        const currentData = siteRes.rows[0].scraped_data || {};
+        let logs = currentData.behavior_logs || [];
+        if (!Array.isArray(logs)) logs = [];
+
+        // 2. Add new log at the beginning
+        const newLog = {
+            type: event_type,
+            path: path,
+            ref: referrer,
+            meta: metadata,
+            ts: new Date().toISOString()
+        };
+        logs.unshift(newLog);
+        
+        // 3. Keep only last 50
+        const limitedLogs = logs.slice(0, 50);
+
+        // 4. Dynamic Learning Progress Calculation
+        let tps = 0;
+        if (limitedLogs.length > 5) {
+            const newest = new Date(limitedLogs[0].ts).getTime();
+            const oldest = new Date(limitedLogs[limitedLogs.length - 1].ts).getTime();
+            const durationSec = (newest - oldest) / 1000;
+            if (durationSec > 1) {
+                tps = limitedLogs.length / durationSec;
+            }
+        }
+        
+        // Threshold: 10x of TPS or at least 1000
+        const targetCount = Math.max(1000, Math.ceil(tps * 10));
+        const currentCount = parseInt(currentData.event_count || 0) + 1;
+        
+        let progress = 25;
+        if (currentCount > 0) {
+            progress = Math.min(100, 25 + Math.floor((currentCount / targetCount) * 75));
+        }
+
+        // 5. Atomic Update
+        const updateRes = await client.query(`
             UPDATE sites 
             SET scraped_data = jsonb_set(
                 jsonb_set(
                     jsonb_set(
                         jsonb_set(
-                            COALESCE(scraped_data, '{}'::jsonb), 
-                            '{event_count}', 
-                            (COALESCE((scraped_data->>'event_count')::int, 0) + 1)::text::jsonb
+                            jsonb_set(
+                                jsonb_set(
+                                    COALESCE(scraped_data, '{}'::jsonb), 
+                                    '{behavior_logs}', $1::jsonb
+                                ),
+                                '{event_count}', $2::jsonb
+                            ),
+                            '{learning_progress}', $3::jsonb
                         ),
-                        '{learning_progress}', 
-                        (
-                            CASE 
-                                WHEN (scraped_data->>'learning_progress')::int >= 100 THEN '100'
-                                ELSE LEAST(25 + (COALESCE((scraped_data->>'event_count')::int, 0) / 20.0), 100)::int::text
-                            END
-                        )::jsonb
+                        '{stats_tps}', $4::jsonb
                     ),
-                    '{script_detected}',
-                    'true'::jsonb
+                    '{stats_target_count}', $5::jsonb
                 ),
-                '{behavior_logs}',
-                (
-                    SELECT jsonb_agg(elem)
-                    FROM (
-                        SELECT elem FROM jsonb_array_elements(COALESCE(scraped_data->'behavior_logs', '[]'::jsonb)) AS elem
-                        UNION ALL
-                        SELECT jsonb_build_object(
-                            'type', $2::text,
-                            'path', $3::text,
-                            'ref', $4::text,
-                            'meta', $5::jsonb,
-                            'ts', CURRENT_TIMESTAMP
-                        )
-                        ORDER BY (elem->>'ts') DESC
-                        LIMIT 50
-                    ) AS sub
-                )
+                '{script_detected}', 'true'::jsonb
             )
-            WHERE api_key = $1
-            RETURNING id, scraped_data->'learning_progress' as progress, scraped_data->'automation'->'ai_auto_optimize' as auto_pilot
-        `;
-        
-        const result = await client.query(updateQuery, [api_key, event_type, path, referrer, JSON.stringify(metadata)]);
-        
+            WHERE id = $6
+            RETURNING scraped_data->'automation'->'ai_auto_optimize' as auto_pilot
+        `, [
+            JSON.stringify(limitedLogs), 
+            JSON.stringify(currentCount), 
+            JSON.stringify(progress.toString()),
+            JSON.stringify(tps.toFixed(2)),
+            JSON.stringify(targetCount),
+            siteId
+        ]);
+
         // --- Continuous AI Auto-Pilot Trigger ---
-        if (result.rows[0]) {
-            const { id, progress, auto_pilot } = result.rows[0];
-            if (progress === '100' && auto_pilot === true) {
-                console.log(`[Auto-Pilot] Learning threshold reached for Site ${id}. Triggering optimization...`);
-                
-                // 비동기로 AI 최적화 실행 (클라이언트 응답 지연 방지)
-                runAutoPilotOptimization(id).then(async () => {
-                    // 최적화 완료 후 다시 학습 게이지를 25%로 리셋하여 '연속적 최적화' 사이클을 만듭니다.
-                    const resetClient = await pool.connect();
-                    try {
-                        await resetClient.query(
-                            "UPDATE sites SET scraped_data = jsonb_set(jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{learning_progress}', '25'::jsonb), '{event_count}', '0'::jsonb) WHERE id = $1",
-                            [id]
-                        );
-                    } finally {
-                        resetClient.release();
-                    }
-                });
-            }
+        if (progress === 100) {
+            console.log(`[Auto-Pilot] Threshold reached for Site ${siteId}.`);
+            runAutoPilotOptimization(siteId).then(async () => {
+                const resetClient = await pool.connect();
+                try {
+                    await resetClient.query(
+                        "UPDATE sites SET scraped_data = jsonb_set(jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{learning_progress}', '25'::jsonb), '{event_count}', '0'::jsonb) WHERE id = $1",
+                        [siteId]
+                    );
+                } finally { resetClient.release(); }
+            });
         }
 
         res.status(204).send();
@@ -384,59 +447,89 @@ app.get('/sdk.js', async (req, res) => {
             }
 
             const referer = req.get('referer');
-            console.log(`[SDK] Request for Org: ${resolvedOrgId}, Referer: ${referer}`);
+            console.log(`[SDK DEBUG] Key: ${key}, Referer: ${referer}, Org: ${resolvedOrgId}`);
             if (referer) {
                 try {
                     const urlObj = new URL(referer);
-                    const domain = urlObj.origin.toLowerCase();
-                    const domainWithoutProtocol = domain.replace(/^https?:\/\//, '');
+                    const origin = urlObj.origin.toLowerCase();
+                    const host = urlObj.hostname.toLowerCase();
+                    const hostWithoutWww = host.replace(/^www\./, '');
                     
-                    // 프로토콜(http/https) 및 트레일링 슬래시 여부에 상관없이 도메인이 같으면 매칭되도록 개선
+                    console.log(`[SDK DEBUG] Parsed - Origin: ${origin}, Host: ${host}, Base: ${hostWithoutWww}`);
+
+                    // [Senior Strategy] Multi-pattern matching for maximum compatibility (www, protocol-less, etc.)
                     const result = await client.query(
-                        "SELECT * FROM sites WHERE organization_id = $1 AND (url ILIKE $2 OR url ILIKE $3 OR url ILIKE $4 OR url ILIKE $5) AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at') LIMIT 1",
-                        [resolvedOrgId, `%://${domainWithoutProtocol}`, `%://${domainWithoutProtocol}/`, domainWithoutProtocol, `${domainWithoutProtocol}/`]
+                        `SELECT s.id, s.url, s.api_key, s.scraped_data, o.id as org_id, o.name as org_name
+                         FROM sites s
+                         JOIN organizations o ON s.organization_id = o.id
+                         WHERE s.organization_id = $1 
+                         AND (
+                            s.url ILIKE $2 OR s.url ILIKE $3 OR 
+                            s.url ILIKE $4 OR s.url ILIKE $5 OR 
+                            s.url ILIKE $6 OR s.url ILIKE $7
+                         ) 
+                         AND NOT (COALESCE(s.scraped_data, '{}'::jsonb) ? 'deleted_at') 
+                         ORDER BY (s.scraped_data->>'sdk_verified' = 'true') DESC LIMIT 1`,
+                        [
+                            resolvedOrgId, 
+                            origin, `${origin}/`,
+                            `%://${host}`, `%://${host}/`,
+                            `%://${hostWithoutWww}`, `%://${hostWithoutWww}/`
+                        ]
                     );
                     site = result.rows[0];
+                    console.log(`[SDK DEBUG] Match result: ${site ? 'FOUND (' + site.url + ')' : 'NOT FOUND'}`);
                 } catch (e) {
                     console.error("[SDK] Referer URL parse error", e);
                 }
             }
         } else {
             // Treat as individual Site API Key
-            const result = await client.query("SELECT * FROM sites WHERE api_key = $1 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at')", [key]);
+            const result = await client.query(
+                `SELECT s.*, o.id as org_id, o.name as org_name
+                 FROM sites s 
+                 JOIN organizations o ON s.organization_id = o.id
+                 WHERE s.api_key = $1 AND NOT (COALESCE(s.scraped_data, '{}'::jsonb) ? 'deleted_at')`, 
+                [key]
+            );
             site = result.rows[0];
             if (site) resolvedOrgId = site.organization_id;
         }
 
+        let isVerified = false;
         if (site) {
-            // 마케팅 자동화 기능은 승인(sdk_verified)된 경우에만 작동하지만, 
-            // 스크립트가 설치되었음(script_detected)은 항상 기록하여 관리자가 승인할 수 있게 함
+            isVerified = (site.scraped_data || {}).sdk_verified === true;
+            console.log(`[SDK] Serving SDK for: ${site.url} (Verified: ${isVerified})`);
+            
             const siteData = site.scraped_data || {};
-            if (!siteData.sdk_verified && !siteData.script_detected) {
+            // Record script detection if not already noted
+            if (!siteData.script_detected) {
                 await client.query(
                     "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"script_detected\": true}'::jsonb WHERE id = $1",
                     [site.id]
                 );
-                console.log(`[SDK] Script signal received for registered site: ${site.url}`);
-                // 최신 상태를 반영하기 위해 객체 업데이트
-                if (!site.scraped_data) site.scraped_data = {};
                 site.scraped_data.script_detected = true;
             }
         } else {
+            // --- Discovery Logic (Only if NO site was matched above) ---
             const ref = req.get('referer');
+            console.log(`[SDK DEBUG] Entering Discovery: Ref=${ref}, Org=${resolvedOrgId}`);
             if (ref && resolvedOrgId) {
                 try {
                     const urlObj = new URL(ref);
                     const domain = urlObj.origin.toLowerCase();
-                    const domainWithoutProtocol = domain.replace(/^https?:\/\//, '');
+                    const host = urlObj.hostname.toLowerCase();
+                    const hostWithoutWww = host.replace(/^www\./, '');
                     
-                    // DB에서 이미 탐지되었거나 등록되었는지 확인
-                    // URL 정규화를 위해 다양한 패턴으로 검색
+                    console.log(`[SDK DEBUG] Discovery - Domain: ${domain}, Host: ${host}`);
+
+                    // Re-check for discovery to avoid duplicates, including deleted ones
                     const checkRes = await client.query(
-                        "SELECT id, scraped_data FROM sites WHERE organization_id = $1 AND (url ILIKE $2 OR url ILIKE $3 OR url ILIKE $4 OR url ILIKE $5)",
-                        [resolvedOrgId, domain, `${domain}/`, domainWithoutProtocol, `${domainWithoutProtocol}/`]
+                        "SELECT id, scraped_data FROM sites WHERE organization_id = $1 AND (url ILIKE $2 OR url ILIKE $3) LIMIT 1",
+                        [resolvedOrgId, `%://${host}`, `%://${hostWithoutWww}`]
                     );
 
+                    console.log(`[SDK DEBUG] Discovery check res count: ${checkRes.rows.length}`);
                     if (checkRes.rows.length === 0) {
                         const apiKey = crypto.randomBytes(16).toString('hex');
                         await client.query(
@@ -448,33 +541,30 @@ app.get('/sdk.js', async (req, res) => {
                                 script_detected: true
                             }]
                         );
-                        console.log(`[Discovery] New site automatically discovered (Pending Approval): ${domain} for Org ${resolvedOrgId}`);
+                        console.log(`[Discovery] New site automatically discovered: ${domain} for Org ${resolvedOrgId}`);
                     } else {
-                        // 기존에 수동으로 등록되었거나 이미 발견된 사이트인 경우, 스크립트 신호 감지 업데이트
-                        const siteId = checkRes.rows[0].id;
-                        const siteData = checkRes.rows[0].scraped_data || {};
+                        // [Fix] If site was deleted, RESTORE it
+                        const existingSiteId = checkRes.rows[0].id;
+                        const existingData = checkRes.rows[0].scraped_data || {};
                         
-                        // [Strict Admin Approval] 삭제되지 않은 사이트에 대해서만 설치 신호를 기록합니다.
-                        // 승인(sdk_verified)은 오직 관리자가 버튼을 눌러야만 처리됩니다.
-                        if (!siteData.script_detected && !siteData.deleted_at) {
+                        console.log(`[SDK DEBUG] Existing site found: ID=${existingSiteId}, DeletedAt=${existingData.deleted_at}`);
+                        if (existingData.deleted_at) {
                             await client.query(
-                                "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"script_detected\": true}'::jsonb WHERE id = $1",
-                                [siteId]
+                                "UPDATE sites SET scraped_data = (scraped_data - 'deleted_at') || '{\"status\": \"discovered\", \"script_detected\": true}'::jsonb WHERE id = $1",
+                                [existingSiteId]
                             );
-                            console.log(`[SDK] Script signal detected for pending site: ${domain}`);
+                            console.log(`[Discovery] Restored previously deleted site: ${domain}`);
                         }
                     }
                 } catch (e) {
                     console.error("[Discovery] Error saving to DB:", e);
                 }
             }
-            const refLog = ref || 'unknown';
             res.set('Content-Type', 'application/javascript');
-            return res.send(`console.log('BrightNetworks SDK: Site discovery recorded for ${refLog}. Waiting for admin approval.');`);
+            res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+            return res.send(`// v=${new Date().getTime()}\nconsole.log('BrightNetworks SDK (Discovery Mode): Site recorded. Waiting for admin approval.');`);
         }
-        
-        const isVerified = (site.scraped_data || {}).sdk_verified === true;
-        
+
         const defaults = {
             social_proof: { enabled: true, template: "{location} {customer}님이 {product}를 방금 구매했습니다!" },
             exit_intent: { enabled: true, text: "잠시만요! 🏃‍♂️ 지금 나가시기엔 너무 아쉬운 혜택이 있어요..." },
@@ -484,7 +574,6 @@ app.get('/sdk.js', async (req, res) => {
             inactivity_nudge: { enabled: true, idle_seconds: 30, text: "혹시 더 궁금한 점이 있으신가요? {customer}님만을 위한 가이드를 확인해보세요!" }
         };
 
-        // 승인된 사이트인 경우만 마케팅 설정을 로드하고, 아니면 모든 위젯을 비활성화(empty) 처리
         const config = isVerified ? {
             ...defaults,
             ...((site.scraped_data || {}).automation || {})
@@ -499,49 +588,80 @@ app.get('/sdk.js', async (req, res) => {
             price_match: { enabled: false }
         };
 
-                // Generate dynamic JS
-                const apiBase = `${req.protocol}://${req.get('host')}`;
-                const sdkCode = `
+        const sdkHost = req.get('host');
+        const apiBase = `//${sdkHost}`; 
+        
+        // [Debug] Log final site data before serving SDK
+        console.log(`[SDK] Generating code for SiteID: ${site.id}, API_KEY: ${site.api_key || 'MISSING'}, Org: ${site.org_name} (#${site.org_id})`);
+        
+        // [Critical Fix] Ensure API_KEY is never 'undefined' string
+        const finalApiKey = site.api_key || (key.includes('-') ? 'pending' : key);
+
+        const sdkCode = `
+            // Version: ${new Date().toISOString()}
             (function() {
                 const config = ${JSON.stringify(config)};
                 const siteData = ${JSON.stringify(site.scraped_data || {})};
-                const API_KEY = '${site.api_key}';
+                const API_KEY = '${finalApiKey}';
+                const ORG_ID = ${site.org_id};
+                const ORG_NAME = '${site.org_name}';
                 const isVerified = ${isVerified};
                 const API_BASE = '${apiBase}';
                 const SITE_URL = '${site.url}';
                 
-                console.log('Brightnetworks Intelligence SDK Loaded for ' + SITE_URL);
+                console.log('[BrightNetworks] SDK Loaded for ' + SITE_URL + ' (Org: ' + ORG_NAME + ' #' + ORG_ID + ')');
                 if (!isVerified) {
-                    console.log('SDK: Connection established for ' + SITE_URL + '. Waiting for admin approval.');
+                    console.log('[BrightNetworks] SDK: Connection established for ' + SITE_URL + '. Waiting for admin approval.');
                 }
             
                 const LearningEngine = {
                     scrollMarkers: new Set(),
                     
                     pulse: function(eventType, metadata = {}) {
+                        console.log('[BrightSDK] Attempting to pulse event:', eventType, metadata);
+                        
+                        // Extract UTM parameters
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const utm = {};
+                        ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'].forEach(key => {
+                            if (urlParams.has(key)) utm[key] = urlParams.get(key);
+                        });
+
                         const data = JSON.stringify({
                             api_key: API_KEY,
                             event_type: eventType,
-                            path: window.location.pathname,
+                            path: window.location.pathname + window.location.search,
                             referrer: document.referrer,
                             metadata: {
                                 title: document.title,
                                 viewport: { w: window.innerWidth, h: window.innerHeight },
+                                utm: Object.keys(utm).length > 0 ? utm : null,
                                 ...metadata
                             },
                             timestamp: new Date().toISOString()
                         });
             
                         const signalUrl = API_BASE + '/api/v1/learning/signal';
-                        if (navigator.sendBeacon) {
-                            navigator.sendBeacon(signalUrl, data);
-                        } else {
+                        
+                        // [Modern Standard] fetch with keepalive is more reliable for JSON and CORS than sendBeacon
+                        if (window.fetch) {
                             fetch(signalUrl, { 
                                 method: 'POST', 
                                 headers: { 'Content-Type': 'application/json' },
                                 body: data, 
                                 keepalive: true 
-                            }).catch(() => {});
+                            })
+                            .then(r => console.log('[BrightSDK] Pulse success:', eventType))
+                            .catch(err => {
+                                console.warn('[BrightSDK] Fetch pulse failed, falling back to sendBeacon:', err);
+                                if (navigator.sendBeacon) {
+                                    const blob = new Blob([data], { type: 'text/plain' });
+                                    navigator.sendBeacon(signalUrl, blob);
+                                }
+                            });
+                        } else if (navigator.sendBeacon) {
+                            const blob = new Blob([data], { type: 'text/plain' });
+                            navigator.sendBeacon(signalUrl, blob);
                         }
                     },
             
@@ -550,6 +670,7 @@ app.get('/sdk.js', async (req, res) => {
                         [25, 50, 75, 100].forEach(marker => {
                             if (scrollPercent >= marker && !this.scrollMarkers.has(marker)) {
                                 this.scrollMarkers.add(marker);
+                                console.log('[BrightSDK] Scroll marker reached:', marker + '%');
                                 this.pulse('scroll_depth', { depth: marker });
                             }
                         });
@@ -558,6 +679,7 @@ app.get('/sdk.js', async (req, res) => {
                     trackClicks: function(e) {
                         const target = e.target.closest('a, button, input[type="button"], input[type="submit"]');
                         if (target) {
+                            console.log('[BrightSDK] Click detected on:', target.tagName);
                             this.pulse('click_interaction', {
                                 tag: target.tagName,
                                 text: (target.innerText || target.value || '').substring(0, 50).trim(),
@@ -568,8 +690,20 @@ app.get('/sdk.js', async (req, res) => {
                         }
                     },
             
+                    trackForms: function(e) {
+                        const form = e.target;
+                        console.log('[BrightSDK] Form submission detected:', form.id || form.action);
+                        const inputs = Array.from(form.querySelectorAll('input, select, textarea')).map(i => i.name || i.id).filter(Boolean);
+                        this.pulse('form_submit', {
+                            id: form.id,
+                            action: form.action,
+                            fields: inputs.slice(0, 5)
+                        });
+                    },
+            
                     init: function() {
-                        this.pulse('page_view');
+                        console.log('[BrightSDK] Initializing Learning Engine...');
+                        this.pulse('page_view', { referrer: document.referrer });
                         
                         // 1. Scroll Tracking (Throttled)
                         let scrollTimeout;
@@ -584,11 +718,17 @@ app.get('/sdk.js', async (req, res) => {
             
                         // 2. Click Tracking
                         document.addEventListener('click', (e) => this.trackClicks(e), true);
+
+                        // 3. Form Submission Tracking
+                        document.addEventListener('submit', (e) => this.trackForms(e), true);
             
-                        // 3. Performance/Load metrics
+                        // 4. Performance/Load metrics
                         window.addEventListener('load', () => {
                             const nav = performance.getEntriesByType('navigation')[0];
-                            if (nav) this.pulse('perf_metrics', { load_time: nav.duration });
+                            if (nav) {
+                                console.log('[BrightSDK] Performance metrics captured');
+                                this.pulse('perf_metrics', { load_time: nav.duration });
+                            }
                         });
                     }
                 };
@@ -745,6 +885,7 @@ app.get('/sdk.js', async (req, res) => {
 })();
         `;
         res.set('Content-Type', 'application/javascript');
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.send(sdkCode);
     } catch (err) {
         console.error(err);
@@ -760,6 +901,13 @@ app.post('/api/sites/:id/automation', isAuthenticated, async (req, res) => {
     
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this site." });
+
         await client.query(
             "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || jsonb_build_object('automation', $1::jsonb) WHERE id = $2",
             [config, id]
@@ -884,9 +1032,23 @@ app.get('/api/invitations/accept', async (req, res) => {
 });
 
 app.get('/api/organizations/:id/discoveries', isAuthenticated, async (req, res) => {
-    const orgId = parseInt(req.params.id);
+    let orgId = req.params.id;
+    
+    // Try to decode if it looks like a public_id
+    if (typeof orgId === 'string' && orgId.includes('-')) {
+        const decoded = decodeOrgId(orgId);
+        if (!decoded) return res.status(403).json({ error: "Invalid Org ID" });
+        orgId = decoded;
+    } else {
+        orgId = parseInt(orgId);
+    }
+
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const orgRes = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [orgId, req.user.id]);
+        if (orgRes.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this organization." });
+
         const result = await client.query(
             "SELECT url, scraped_data->>'discovered_at' as discovered_at FROM sites WHERE organization_id = $1 AND (scraped_data->>'status' = 'discovered')",
             [orgId]
@@ -901,10 +1063,24 @@ app.get('/api/organizations/:id/discoveries', isAuthenticated, async (req, res) 
 });
 
 app.post('/api/organizations/:id/discoveries/clear', isAuthenticated, async (req, res) => {
-    const orgId = parseInt(req.params.id);
+    let orgId = req.params.id;
+    
+    // Try to decode if it looks like a public_id
+    if (typeof orgId === 'string' && orgId.includes('-')) {
+        const decoded = decodeOrgId(orgId);
+        if (!decoded) return res.status(403).json({ error: "Invalid Org ID" });
+        orgId = decoded;
+    } else {
+        orgId = parseInt(orgId);
+    }
+
     const { url } = req.body;
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const orgRes = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [orgId, req.user.id]);
+        if (orgRes.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this organization." });
+
         if (url) {
             await client.query(
                 "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"cleared\"}'::jsonb WHERE organization_id = $1 AND url = $2",
@@ -944,10 +1120,22 @@ async function getUsage(organization_id) {
 }
 
 app.get('/api/usage', isAuthenticated, async (req, res) => {
-    const { organization_id } = req.query;
+    let { organization_id } = req.query;
     if (!organization_id) return res.status(400).json({ error: "Org ID is required" });
     
+    // Try to decode if it looks like a public_id
+    if (typeof organization_id === 'string' && organization_id.includes('-')) {
+        const decoded = decodeOrgId(organization_id);
+        if (!decoded) return res.status(403).json({ error: "Invalid Org ID" });
+        organization_id = decoded;
+    }
+
+    const client = await pool.connect();
     try {
+        // [Security] Verify ownership before checking usage
+        const orgRes = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [organization_id, req.user.id]);
+        if (orgRes.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this organization." });
+
         const count = await getUsage(organization_id);
         const plan = req.session.debug_plan || 'free';
         let limit = 1;
@@ -957,6 +1145,8 @@ app.get('/api/usage', isAuthenticated, async (req, res) => {
         res.json({ used: count, limit: limit, plan: plan });
     } catch (err) {
         res.status(500).json({ error: "Usage check failed" });
+    } finally {
+        client.release();
     }
 });
 
@@ -1008,15 +1198,27 @@ app.post('/api/sitemaps/parse', isAuthenticated, async (req, res) => {
 });
 
 app.get('/api/sites', isAuthenticated, async (req, res) => {
-    const { organization_id } = req.query;
+    let { organization_id } = req.query;
     if (!organization_id) return res.status(400).json({ error: "Org ID is required" });
+
+    // Try to decode if it looks like a public_id
+    if (typeof organization_id === 'string' && organization_id.includes('-')) {
+        const decoded = decodeOrgId(organization_id);
+        if (!decoded) return res.status(403).json({ error: "Invalid Org ID" });
+        organization_id = decoded;
+    }
 
     const client = await pool.connect();
     try {
-        // [Filter] 삭제된 사이트('deleted_at')와 거절된 사이트('rejected')를 모두 제외합니다.
+        // [Security] Ensure the organization belongs to the authenticated user
         const result = await client.query(
-            "SELECT * FROM sites WHERE organization_id = $1 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at') AND (scraped_data->>'status' IS NULL OR scraped_data->>'status' != 'rejected') ORDER BY created_at DESC", 
-            [organization_id]
+            `SELECT s.* FROM sites s
+             JOIN organizations o ON s.organization_id = o.id
+             WHERE s.organization_id = $1 AND o.owner_id = $2
+             AND NOT (COALESCE(s.scraped_data, '{}'::jsonb) ? 'deleted_at') 
+             AND (s.scraped_data->>'status' IS NULL OR s.scraped_data->>'status' != 'rejected') 
+             ORDER BY s.created_at DESC`, 
+            [organization_id, req.user.id]
         );
         res.json({ sites: result.rows });
     } catch (err) {
@@ -1028,15 +1230,26 @@ app.get('/api/sites', isAuthenticated, async (req, res) => {
 });
 
 app.get('/api/sites/trash', isAuthenticated, async (req, res) => {
-    const { organization_id } = req.query;
+    let { organization_id } = req.query;
     if (!organization_id) return res.status(400).json({ error: "Org ID is required" });
+
+    // Try to decode if it looks like a public_id
+    if (typeof organization_id === 'string' && organization_id.includes('-')) {
+        const decoded = decodeOrgId(organization_id);
+        if (!decoded) return res.status(403).json({ error: "Invalid Org ID" });
+        organization_id = decoded;
+    }
 
     const client = await pool.connect();
     try {
-        // Fetch deleted sites using JSONB flag
+        // [Security] Verify ownership before fetching trash
         const result = await client.query(
-            "SELECT * FROM sites WHERE organization_id = $1 AND (scraped_data ? 'deleted_at') ORDER BY (scraped_data->>'deleted_at') DESC", 
-            [organization_id]
+            `SELECT s.* FROM sites s 
+             JOIN organizations o ON s.organization_id = o.id
+             WHERE s.organization_id = $1 AND o.owner_id = $2
+             AND (s.scraped_data ? 'deleted_at') 
+             ORDER BY (s.scraped_data->>'deleted_at') DESC`, 
+            [organization_id, req.user.id]
         );
         res.json({ sites: result.rows });
     } catch (err) {
@@ -1051,6 +1264,13 @@ app.delete('/api/sites/:id', isAuthenticated, async (req, res) => {
     const { id } = req.params;
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this site." });
+
         // Soft delete using JSONB flag
         const deletedAt = new Date().toISOString();
         await client.query(
@@ -1070,6 +1290,13 @@ app.post('/api/sites/restore/:id', isAuthenticated, async (req, res) => {
     const { id } = req.params;
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this site." });
+
         // Restore by removing JSONB flag
         await client.query(
             "UPDATE sites SET scraped_data = scraped_data - 'deleted_at' WHERE id = $1", 
@@ -1084,12 +1311,38 @@ app.post('/api/sites/restore/:id', isAuthenticated, async (req, res) => {
     }
 });
 
+app.delete('/api/sites/:id/permanent', isAuthenticated, async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    try {
+        // [Security] Verify ownership
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this site." });
+
+        // Hard delete from database
+        await client.query("DELETE FROM sites WHERE id = $1", [id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Database error" });
+    } finally {
+        client.release();
+    }
+});
+
 app.get('/api/sites/detail/:id', isAuthenticated, async (req, res) => {
     const { id } = req.params;
     const client = await pool.connect();
     try {
-        const result = await client.query('SELECT * FROM sites WHERE id = $1', [id]);
-        if (result.rows.length === 0) return res.status(404).json({ error: "Report not found" });
+        // [Security] Verify ownership
+        const result = await client.query(
+            "SELECT s.* FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: "Report not found or unauthorized." });
         res.json({ site: result.rows[0] });
     } catch (err) {
         res.status(500).json({ error: "Database error" });
@@ -1323,8 +1576,12 @@ app.post('/api/sites/:id/analyze', isAuthenticated, async (req, res) => {
     // Check limit first
     const client = await pool.connect();
     try {
-        const siteRes = await client.query("SELECT organization_id FROM sites WHERE id = $1", [id]);
-        if (siteRes.rows.length === 0) return res.status(404).json({ error: "Site not found" });
+        // [Security] Verify ownership and get orgId in one query
+        const siteRes = await client.query(
+            "SELECT s.organization_id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2", 
+            [id, req.user.id]
+        );
+        if (siteRes.rows.length === 0) return res.status(404).json({ error: "Site not found or unauthorized." });
         
         const orgId = siteRes.rows[0].organization_id;
         const used = await getUsage(orgId);
@@ -1350,8 +1607,15 @@ app.post('/api/sites/:id/analyze', isAuthenticated, async (req, res) => {
 });
 
 app.post('/api/sites', isAuthenticated, async (req, res) => {
-    const { organization_id, url, skip_analysis } = req.body;
+    let { organization_id, url, skip_analysis } = req.body;
     if (!organization_id || !url) return res.status(400).json({ error: "Org ID and URL are required" });
+
+    // Try to decode if it looks like a public_id
+    if (typeof organization_id === 'string' && organization_id.includes('-')) {
+        const decoded = decodeOrgId(organization_id);
+        if (!decoded) return res.status(403).json({ error: "Invalid Org ID" });
+        organization_id = decoded;
+    }
 
     // URL 정규화 (Origin만 추출하여 중복 방지)
     let normalizedUrl = url;
@@ -1364,6 +1628,10 @@ app.post('/api/sites', isAuthenticated, async (req, res) => {
 
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const orgRes = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [organization_id, req.user.id]);
+        if (orgRes.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this organization." });
+
         // 기존에 등록된 사이트가 있는지 확인 (삭제되지 않은 것 중)
         const existingRes = await client.query(
             "SELECT id FROM sites WHERE organization_id = $1 AND url = $2 AND NOT (scraped_data ? 'deleted_at')",
@@ -1407,6 +1675,13 @@ app.post('/api/sites/:id/approve', isAuthenticated, async (req, res) => {
     const siteId = parseInt(req.params.id);
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [siteId, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this site." });
+
         await client.query(
             "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"sdk_verified\": true, \"status\": \"active\"}'::jsonb WHERE id = $1",
             [siteId]
@@ -1425,6 +1700,13 @@ app.post('/api/sites/:id/reject', isAuthenticated, async (req, res) => {
     const siteId = parseInt(req.params.id);
     const client = await pool.connect();
     try {
+        // [Security] Verify ownership
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [siteId, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this site." });
+
         // [Reject Logic] 승인 거부 시 상태를 'rejected'로 변경하고 대시보드에서 숨깁니다.
         await client.query(
             "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"rejected\", \"rejected_at\": \"' || CURRENT_TIMESTAMP || '\"}'::jsonb WHERE id = $1",
