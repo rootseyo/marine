@@ -41,6 +41,37 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
     if (statusDiv) statusDiv.classList.remove('hidden');
     if (activeName) activeName.textContent = orgName;
 
+    // Update Global Badge (Top Right)
+    const globalBadge = document.getElementById('activeOrgBadge');
+    const globalName = document.getElementById('activeOrgDisplay');
+    const globalPlan = document.getElementById('activeOrgPlanBadge');
+    
+    if (globalBadge && globalName) {
+        globalName.textContent = orgName;
+        globalBadge.classList.remove('d-none');
+        
+        // Fetch and Update Plan Info
+        const orgParam = currentPublicId || orgId;
+        fetch(`/api/usage?organization_id=${orgParam}`)
+            .then(res => res.json())
+            .then(data => {
+                if (globalPlan) {
+                    const plan = (data.plan || 'FREE').toUpperCase();
+                    globalPlan.textContent = plan;
+                    
+                    // Style by plan
+                    globalPlan.className = 'badge extra-small fw-normal';
+                    if (plan === 'PRO') globalPlan.classList.add('bg-primary', 'text-white');
+                    else if (plan === 'STARTER') globalPlan.classList.add('bg-info', 'text-dark');
+                    else globalPlan.classList.add('bg-dark', 'text-white');
+                }
+            })
+            .catch(() => { if (globalPlan) globalPlan.textContent = 'FREE'; });
+    }
+
+    if (typeof loadDashboardStats === 'function') loadDashboardStats();
+    if (typeof loadUsage === 'function') loadUsage();
+
     const scriptSection = document.getElementById('orgScriptSection');
     const scriptList = document.getElementById('orgScriptList');
     
@@ -128,10 +159,13 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
                 
             html += `
                 <div class="mb-5">
-                    <div class="code-block p-0">
+                    <div class="code-block">
                         <button class="copy-btn" onclick="copyText('script_universal')">Copy</button>
                         <pre class="m-0"><code id="script_universal" class="language-html">&lt;script src="${sdkHost}/sdk.js?key=${displayId}" async&gt;&lt;/script&gt;</code></pre>
                     </div>
+                    <p class="text-muted small mt-2 mb-0">
+                        <i class="fas fa-info-circle me-1"></i> 모든 페이지의 <code>&lt;head&gt;</code> 영역에 위 스크립트를 삽입해 주세요.
+                    </p>
                 </div>
             `;
 

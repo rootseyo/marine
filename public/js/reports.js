@@ -4,6 +4,7 @@
 
 let reportSites = [];
 let scoreChart = null;
+let scheduleModal = null;
 
 async function loadReportHistory() {
     const orgParam = currentPublicId || currentOrgId;
@@ -35,35 +36,53 @@ function renderReportHistory() {
     list.innerHTML = '';
     filteredSites.forEach(site => {
         const tr = document.createElement('tr');
-        const isAnalyzed = site.scraped_data?.status === 'active';
+        const status = site.scraped_data?.status;
+        const isAnalyzed = status === 'active';
+        const isQueued = status === 'queued';
         const historyCount = (site.scraped_data?.history?.length || 0) + (isAnalyzed ? 1 : 0);
         
         tr.onclick = () => {
             if (isAnalyzed) viewExistingReport(site.id);
         };
         const cleanUrl = site.url.replace(/^https?:\/\//, '');
+        const device = site.scraped_data?.device || 'desktop';
+        const deviceIcon = device === 'mobile' ? '<i class="fas fa-mobile-alt me-1 text-muted" title="Mobile View"></i>' : '<i class="fas fa-desktop me-1 text-muted" title="Desktop View"></i>';
         
+        // Schedule Badge
+        const schedule = site.scraped_data?.schedule || 'none';
+        let scheduleBadge = '';
+        if (schedule !== 'none') {
+            const time = site.scraped_data?.schedule_time || '00:00';
+            const nextRun = site.scraped_data?.next_run_at ? new Date(site.scraped_data.next_run_at).toLocaleDateString() : '';
+            scheduleBadge = `<div class="mt-1"><span class="badge bg-light text-dark border extra-small" title="다음 예정일: ${nextRun}"><i class="fas fa-calendar-check me-1"></i>${schedule.toUpperCase()} @ ${time}</span></div>`;
+        }
+
         tr.innerHTML = `
             <td onclick="event.stopPropagation()"><input type="checkbox" class="site-check" value="${site.id}"></td>
             <td>
+                ${deviceIcon}
                 <span class="text-primary fw-bold">${cleanUrl}</span>
                 ${historyCount > 1 ? `<span class="badge rounded-pill bg-light text-dark border ms-1" title="분석 히스토리">v${historyCount}</span>` : ''}
             </td>
             <td>
-                <span class="badge ${isAnalyzed ? 'bg-success' : (site.scraped_data?.status === 'error' ? 'bg-danger' : 'bg-secondary')}">
-                    ${isAnalyzed ? '분석 완료' : (site.scraped_data?.status === 'error' ? '오류' : '대기 중')}
+                <span class="badge ${isAnalyzed ? 'bg-success' : (isQueued ? 'bg-info' : (status === 'error' ? 'bg-danger' : 'bg-secondary'))}">
+                    ${isAnalyzed ? '분석 완료' : (isQueued ? '분석 대기 중' : (status === 'error' ? '오류' : '대기 중'))}
                 </span>
+                ${scheduleBadge}
             </td>
             <td><span class="badge ${site.seo_score > 70 ? 'bg-success' : (site.seo_score > 0 ? 'bg-warning' : 'bg-light text-dark')}">${site.seo_score > 0 ? site.seo_score + '점' : '--'}</span></td>
             <td class="text-muted small">${new Date(site.created_at).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
             <td>
                 <div class="d-flex gap-1">
-                    <button class="btn btn-xs btn-primary" onclick="event.stopPropagation(); reAnalyzeSite('${site.id}')" title="재분석 스캔">
-                        <i class="fas fa-sync-alt me-1"></i> 분석
+                    <button class="btn btn-xs ${isQueued ? 'btn-secondary' : 'btn-primary'}" onclick="event.stopPropagation(); reAnalyzeSite('${site.id}')" title="즉시 분석 실행" ${isQueued ? 'disabled' : ''}>
+                        <i class="fas ${isQueued ? 'fa-hourglass-half' : 'fa-play'} me-1"></i> 분석
+                    </button>
+                    <button class="btn btn-xs btn-outline-secondary" onclick="event.stopPropagation(); openScheduleModal('${site.id}', '${schedule}', '${site.scraped_data?.schedule_time || '03:00'}')" title="스케줄 설정">
+                        <i class="fas fa-clock"></i>
                     </button>
                     ${isAnalyzed ? `
                         <button class="btn btn-xs btn-outline-primary" onclick="event.stopPropagation(); viewExistingReport('${site.id}')">
-                            <i class="fas fa-file-alt me-1"></i> 리포트
+                            <i class="fas fa-file-alt"></i>
                         </button>
                     ` : ''}
                     <button class="btn btn-xs btn-outline-danger border-0" onclick="event.stopPropagation(); deleteSite('${site.id}')">
@@ -84,21 +103,111 @@ async function batchAnalyzeSelected() {
     const selected = Array.from(document.querySelectorAll('.site-check:checked')).map(cb => cb.value);
     if (selected.length === 0) return alert("분석할 사이트를 선택해주세요.");
     
-    if (!confirm(`${selected.length}개의 사이트를 일괄 분석하시겠습니까?`)) return;
+    if (!confirm(`${selected.length}개의 사이트를 순차 분석 대기 목록에 추가하시겠습니까?`)) return;
 
-    const btn = document.querySelector('button[onclick="batchAnalyzeSelected()"]');
-    const originalHtml = btn.innerHTML;
-    btn.disabled = true;
-
-    for (let i = 0; i < selected.length; i++) {
-        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> 분석 중 (${i+1}/${selected.length})`;
-        await triggerAnalysis(selected[i]);
+    for (let siteId of selected) {
+        await fetch(`/api/sites/${siteId}/queue`, { method: 'POST' });
     }
 
-    btn.disabled = false;
-    btn.innerHTML = originalHtml;
-    alert("선택한 사이트의 분석이 모두 완료되었습니다.");
+    alert("분석 대기 목록에 추가되었습니다. 서버가 순차적으로 분석을 진행합니다.");
     loadReportHistory();
+}
+
+async function batchQueueAll() {
+    const orgParam = currentPublicId || currentOrgId;
+    if (!orgParam) return;
+
+    if (!confirm("이 조직의 모든 사이트를 순차적으로 분석하시겠습니까? (서버 부하 방지를 위해 순차 진행됩니다)")) return;
+
+    try {
+        const res = await fetch(`/api/organizations/${orgParam}/batch-queue`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            alert(data.message);
+            loadReportHistory();
+        } else {
+            alert(data.error);
+        }
+    } catch (err) {
+        alert("서버 오류");
+    }
+}
+
+function openScheduleModal(siteId, currentSchedule, currentTime) {
+    document.getElementById('scheduleSiteId').value = siteId;
+    document.getElementById('scheduleTargetType').value = 'site';
+    document.getElementById('scheduleTypeSelect').value = currentSchedule || 'none';
+    document.getElementById('scheduleTimeInput').value = currentTime || '03:00';
+    
+    document.getElementById('scheduleModalTitle').innerHTML = '<i class="fas fa-calendar-alt me-2"></i> 사이트 정기 분석 설정';
+    document.getElementById('scheduleModalDesc').textContent = '이 사이트에 대해 정기적으로 AI 분석을 수행하도록 예약합니다.';
+
+    if (!scheduleModal) {
+        scheduleModal = new bootstrap.Modal(document.getElementById('scheduleModal'));
+    }
+    
+    const nextRunInfo = document.getElementById('nextRunInfo');
+    const site = reportSites.find(s => s.id == siteId);
+    if (site && site.scraped_data?.next_run_at) {
+        nextRunInfo.classList.remove('d-none');
+        document.getElementById('nextRunDateDisplay').textContent = new Date(site.scraped_data.next_run_at).toLocaleString();
+    } else {
+        nextRunInfo.classList.add('d-none');
+    }
+    
+    scheduleModal.show();
+}
+
+function openOrgScheduleModal() {
+    const orgParam = currentPublicId || currentOrgId;
+    if (!orgParam) return alert("조직을 선택해주세요.");
+
+    document.getElementById('scheduleTargetType').value = 'org';
+    document.getElementById('scheduleTypeSelect').value = 'none'; 
+    document.getElementById('scheduleTimeInput').value = '03:00';
+    
+    document.getElementById('scheduleModalTitle').innerHTML = '<i class="fas fa-building me-2"></i> 전체 사이트 정기 분석 설정';
+    document.getElementById('scheduleModalDesc').textContent = '현재 조직에 등록된 모든 사이트에 대해 동일한 정기 분석 주기를 설정합니다.';
+    document.getElementById('nextRunInfo').classList.add('d-none');
+
+    if (!scheduleModal) {
+        scheduleModal = new bootstrap.Modal(document.getElementById('scheduleModal'));
+    }
+    
+    scheduleModal.show();
+}
+
+async function saveSchedule() {
+    const targetType = document.getElementById('scheduleTargetType').value;
+    const schedule = document.getElementById('scheduleTypeSelect').value;
+    const time = document.getElementById('scheduleTimeInput').value;
+    const orgParam = currentPublicId || currentOrgId;
+
+    try {
+        let url = '';
+        if (targetType === 'org') {
+            url = `/api/organizations/${orgParam}/schedule`;
+        } else {
+            const siteId = document.getElementById('scheduleSiteId').value;
+            url = `/api/sites/${siteId}/schedule`;
+        }
+
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ schedule, time })
+        });
+        const data = await res.json();
+        if (data.success) {
+            alert(data.message || "스케줄이 저장되었습니다.");
+            if (scheduleModal) scheduleModal.hide();
+            loadReportHistory();
+        } else {
+            alert(data.error);
+        }
+    } catch (err) {
+        alert("저장 실패");
+    }
 }
 
 async function reAnalyzeSite(siteId) {
@@ -112,7 +221,7 @@ async function reAnalyzeSite(siteId) {
         if (res.error) {
             alert(res.error);
         } else {
-            alert("분석이 완료되었습니다.");
+            alert("분석이 시작되었습니다 (순차 대기 목록 추가).");
         }
         loadReportHistory();
         loadUsage();
@@ -131,9 +240,17 @@ async function triggerAnalysis(siteId) {
 
 async function registerOnlySite() {
     const urlInput = document.getElementById('siteUrl');
-    let url = urlInput.value.trim().replace(/^(https?:\/\/)/, '');
+    const deviceSelect = document.getElementById('siteDevice');
+    let url = urlInput.value.trim();
     if (!url) return alert("URL을 입력하세요.");
     if (!currentOrgId) return;
+
+    const device = deviceSelect ? deviceSelect.value : 'desktop';
+
+    // Ensure protocol
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+    }
 
     const btn = document.querySelector('button[onclick="registerOnlySite()"]');
     btn.disabled = true;
@@ -142,7 +259,12 @@ async function registerOnlySite() {
         const res = await fetch('/api/sites', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ organization_id: currentOrgId, url: 'https://' + url, skip_analysis: true })
+            body: JSON.stringify({ 
+                organization_id: currentOrgId, 
+                url: url, 
+                device: device,
+                skip_analysis: true 
+            })
         });
         const data = await res.json();
         if (data.success) {
@@ -163,7 +285,7 @@ async function viewExistingReport(siteId) {
     navigateTo(`/reports/${siteId}`);
 }
 
-let currentFullSiteData = null; // Store full data for version switching
+let currentFullSiteData = null;
 
 async function loadExistingReportData(siteId) {
     try {
@@ -296,7 +418,9 @@ function renderAnalysisResult(siteData, scriptTag, url) {
     }
 
     card.classList.remove('hidden');
-    card.scrollIntoView({ behavior: 'smooth' });
+    const yOffset = -20; 
+    const y = card.getBoundingClientRect().top + window.pageYOffset + yOffset;
+    window.scrollTo({ top: y, behavior: 'smooth' });
 }
 
 function renderScoreChart(score) {
@@ -309,7 +433,6 @@ function renderScoreChart(score) {
     });
 }
 
-// Sitemap logic
 async function parseSitemap() {
     await loadUsage();
     const input = document.getElementById('sitemapUrl');
@@ -395,16 +518,11 @@ async function batchAnalyzeSitemap() {
     loadReportHistory();
 }
 
-// Helpers
 function copyText(elementId) {
     const text = document.getElementById(elementId).textContent.trim();
     navigator.clipboard.writeText(text).then(() => {
         alert("클립보드에 복사되었습니다.");
     });
-}
-
-function copyCode() {
-    copyText('scriptTagCode');
 }
 
 function filterHistoryTable() {
@@ -445,9 +563,6 @@ function updateSortIcons(activeField) {
     });
 }
 
-/**
- * Site Removal (Soft Delete)
- */
 async function deleteSite(siteId) {
     if (!confirm("정말 이 사이트를 삭제하시겠습니까?\n삭제된 사이트는 휴지통에서 30일간 보관됩니다.")) return;
 
@@ -459,14 +574,70 @@ async function deleteSite(siteId) {
         
         if (data.success) {
             alert("사이트가 삭제되었습니다.");
-            loadReportHistory(); // 목록 새로고침
-            if (typeof loadUsage === 'function') loadUsage(); // 사용량 새로고침
-            if (typeof loadSiteHistory === 'function') loadSiteHistory(); // 대시보드 목록 새로고침
+            loadReportHistory();
+            if (typeof loadUsage === 'function') loadUsage();
+            if (typeof loadSiteHistory === 'function') loadSiteHistory();
         } else {
             alert(data.error || "삭제 실패");
         }
     } catch (err) {
         console.error("Delete failed", err);
         alert("서버 오류가 발생했습니다.");
+    }
+}
+
+async function downloadPDF() {
+    if (!currentFullSiteData) return;
+    const siteId = currentFullSiteData.id;
+    const url = `/api/reports/${siteId}/pdf`;
+    
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> 생성 중...';
+
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("PDF 생성 실패");
+        
+        const blob = await response.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = `SEO_Report_${new URL(currentFullSiteData.url).hostname}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    } catch (err) {
+        alert(err.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
+async function emailPDF() {
+    if (!currentFullSiteData) return;
+    const siteId = currentFullSiteData.id;
+    const url = `/api/reports/${siteId}/email`;
+
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> 발송 중...';
+
+    try {
+        const res = await fetch(url, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            alert(data.message);
+        } else {
+            alert(data.error);
+        }
+    } catch (err) {
+        alert("발송 실패");
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
     }
 }

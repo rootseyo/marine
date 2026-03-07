@@ -42,17 +42,26 @@ const routes = {
 function navigateTo(path) {
     history.pushState(null, null, path);
     handleRouting();
+    startSessionTimer(); // Reset timer on navigation
 }
 
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const mainContent = document.getElementById('mainContent');
+    const toggleIcon = document.getElementById('toggleIcon');
     const isCollapsed = sidebar.classList.toggle('collapsed');
     mainContent.classList.toggle('expanded');
-    
+
+    if (toggleIcon) {
+        if (isCollapsed) {
+            toggleIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
+        } else {
+            toggleIcon.classList.replace('fa-chevron-right', 'fa-chevron-left');
+        }
+    }
+
     setCookie('sidebar_collapsed', isCollapsed ? 'true' : 'false', 30);
 }
-
 function handleRouting() {
     let path = window.location.pathname;
     if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
@@ -91,22 +100,89 @@ document.addEventListener('click', (e) => {
 });
 
 // Auth
+let sessionTimeout = null;
+let remainingSeconds = 30 * 60;
+
+function startSessionTimer() {
+    if (sessionTimeout) clearInterval(sessionTimeout);
+    remainingSeconds = 30 * 60;
+    
+    const timerEl = document.getElementById('sessionTimer');
+    if (!timerEl) return;
+
+    sessionTimeout = setInterval(() => {
+        remainingSeconds--;
+        if (remainingSeconds <= 0) {
+            clearInterval(sessionTimeout);
+            alert("세션이 만료되었습니다. 다시 로그인해주세요.");
+            window.location.href = '/api/auth/logout';
+            return;
+        }
+        
+        const mins = Math.floor(remainingSeconds / 60);
+        const secs = remainingSeconds % 60;
+        timerEl.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        
+        // 시각적 경고 (5분 미만 시 빨간색)
+        if (remainingSeconds < 300) timerEl.classList.add('text-danger');
+        else timerEl.classList.remove('text-danger');
+    }, 1000);
+}
+
 async function checkAuth() {
     try {
         const res = await fetch('/api/auth/me');
         if (!res.ok) { window.location.href = '/'; return; }
         const data = await res.json();
         currentUser = data.user;
-        document.getElementById('userName').textContent = currentUser.name;
-        document.getElementById('welcomeName').textContent = currentUser.name;
-        document.getElementById('userAvatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name)}`;
+        
+        // UI Update
+        const userNameEls = ['userName', 'headerUserName'];
+        userNameEls.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = currentUser.name;
+        });
+        
+        const avatarEl = document.getElementById('userAvatar');
+        if (avatarEl) avatarEl.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name)}`;
+        
+        loadUsage();
+        startSessionTimer();
     } catch (err) {
         window.location.href = '/';
     }
 }
 
 // Global UI Section Control
+function copyText(elementId) {
+    const text = document.getElementById(elementId)?.innerText;
+    if (!text) return;
+
+    const btn = event?.currentTarget || document.querySelector(`button[onclick*="${elementId}"]`);
+    
+    navigator.clipboard.writeText(text).then(() => {
+        if (btn) {
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check me-1"></i> Copied!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.innerHTML = originalHtml;
+                btn.classList.remove('copied');
+            }, 2000);
+        }
+    }).catch(err => {
+        console.error('Copy failed', err);
+    });
+}
+
 function showSection(sectionId) {
+    // Update Section Title in Header
+    const navLink = document.querySelector(`#mainNav .nav-link[href="${Object.keys(routes).find(key => routes[key] === sectionId)}"]`);
+    const titleEl = document.getElementById('sectionTitle');
+    if (titleEl && navLink) {
+        titleEl.textContent = navLink.querySelector('span').textContent;
+    }
+
     // Stop automation refresh if moving away from automation section
     if (sectionId !== 'sectionAutomation' && typeof automationRefreshInterval !== 'undefined' && automationRefreshInterval) {
         clearInterval(automationRefreshInterval);
@@ -131,7 +207,7 @@ function showSection(sectionId) {
     // Trigger functional module reloads
     if (sectionId === 'sectionDashboard') {
         if (typeof loadSiteHistory === 'function') loadSiteHistory();
-        if (typeof initRevenueChart === 'function') initRevenueChart();
+        if (typeof loadDashboardStats === 'function') loadDashboardStats();
     }
     if (sectionId === 'sectionReport') {
         if (typeof loadReportHistory === 'function') loadReportHistory();
@@ -164,22 +240,45 @@ async function loadUsage() {
         const display = document.getElementById('remainingCount');
         const limitDisplay = document.getElementById('limitCount');
         const planDisplay = document.getElementById('planLabel');
-        
+
+        // New IDs for Report Section
+        const rRemaining = document.getElementById('reportRemainingCount');
+        const rLimit = document.getElementById('reportLimitCount');
+        const rPlan = document.getElementById('reportPlanLabel');
+
         if (display) display.textContent = remaining;
         if (limitDisplay) limitDisplay.textContent = data.limit;
-        if (planDisplay) planDisplay.textContent = data.plan.charAt(0).toUpperCase() + data.plan.slice(1);
+        if (rRemaining) rRemaining.textContent = remaining;
+        if (rLimit) rLimit.textContent = data.limit;
 
-        // Update Plan UI in Subscription tab
-        const planBadge = document.getElementById('currentPlanBadge');
+        const planText = data.isBeta ? "BETA PRO" : data.plan.charAt(0).toUpperCase() + data.plan.slice(1);
+        if (planDisplay) planDisplay.textContent = planText;
+        if (rPlan) rPlan.textContent = planText;
+
+        // Update Plan UI in Subscription tab        const planBadge = document.getElementById('currentPlanBadge');
         if (planBadge) {
-            planBadge.textContent = data.plan.toUpperCase();
-            document.querySelectorAll('.pricing-card').forEach(c => c.classList.remove('border-primary', 'shadow'));
+            if (data.isBeta) {
+                planBadge.innerHTML = "BETA (PRO 혜택 적용 중)";
+                planBadge.className = "badge bg-warning text-dark";
+            } else {
+                planBadge.textContent = data.plan.toUpperCase();
+                planBadge.className = "badge bg-primary";
+            }
+            
+            document.querySelectorAll('.pricing-card').forEach(c => {
+                c.classList.remove('border-primary', 'shadow');
+                const btn = c.querySelector('button');
+                if (btn && btn.textContent === "현재 플랜") {
+                    btn.textContent = c.id === 'cardPlanFree' ? "이 플랜으로 변경 (Debug)" : "이 플랜으로 변경 (Debug)";
+                }
+            });
+
             const cardMap = { 'free': 'cardPlanFree', 'starter': 'cardPlanStarter', 'pro': 'cardPlanPro' };
             const activeCard = document.getElementById(cardMap[data.plan]);
             if (activeCard) {
                 activeCard.classList.add('border-primary', 'shadow');
                 const btn = activeCard.querySelector('button');
-                if (btn) btn.textContent = "현재 플랜";
+                if (btn) btn.textContent = "현재 적용 플랜";
             }
         }
     } catch (err) {}

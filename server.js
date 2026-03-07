@@ -16,6 +16,44 @@ const { Resend } = require('resend');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+const BETA_MODE = process.env.BETA_MODE === 'true';
+
+// --- Global Logger Prefix ---
+const originalLog = console.log;
+const originalError = console.error;
+const originalWarn = console.warn;
+
+const getTimestamp = () => {
+    const now = new Date();
+    return `[${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}]`;
+};
+
+console.log = (...args) => originalLog(getTimestamp(), ...args);
+console.error = (...args) => originalError(getTimestamp(), ...args);
+console.warn = (...args) => originalWarn(getTimestamp(), ...args);
+
+// --- Plan & Limit Helpers ---
+function getPlanDetails(req) {
+    // If BETA_MODE is enabled, everyone gets 'pro' features for free
+    if (BETA_MODE) {
+        return {
+            plan: 'pro',
+            limit: 10,
+            isBeta: true
+        };
+    }
+
+    const plan = req.session.debug_plan || 'free';
+    let limit = 1;
+    if (plan === 'starter') limit = 5;
+    if (plan === 'pro') limit = 10;
+
+    return {
+        plan: plan,
+        limit: limit,
+        isBeta: false
+    };
+}
 
 // --- Proxy Setup (Crucial for production/Nginx) ---
 app.set('trust proxy', 1);
@@ -70,7 +108,7 @@ app.use(session({
     name: 'bright.sid', // 쿠키 이름 명시
     proxy: true, // 프록시 신뢰 활성화
     cookie: { 
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        maxAge: 30 * 60 * 1000, // 30 minutes
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax' // SameSite: Lax가 보안과 호환성 면에서 가장 무난함
@@ -195,7 +233,12 @@ app.get('/api/auth/oauth/google/callback',
 );
 
 app.get('/api/auth/me', isAuthenticated, (req, res) => {
-    res.json({ user: req.user });
+    const planInfo = getPlanDetails(req);
+    res.json({ 
+        user: req.user,
+        plan: planInfo.plan,
+        isBeta: planInfo.isBeta
+    });
 });
 
 app.get('/api/auth/logout', (req, res) => {
@@ -215,53 +258,64 @@ async function runAutoPilotOptimization(siteId) {
         const site = res.rows[0];
         if (!site || !site.scraped_data || !site.scraped_data.automation?.ai_auto_optimize) return;
         
-        const logs = site.scraped_data.behavior_logs || [];
-        if (logs.length < 10) return; // Need some data to make decisions
+        const allLogs = site.scraped_data.behavior_logs || [];
+        const lastAnalyzedTs = site.scraped_data.ai_last_analyzed_ts || "1970-01-01T00:00:00.000Z";
+        
+        // 1. [Efficiency] Filter only NEW logs since last checkpoint
+        const newLogs = allLogs.filter(log => log.ts > lastAnalyzedTs);
+        
+        // Need at least 20 new logs to justify a new AI analysis (Token cost management)
+        if (newLogs.length < 20) {
+            console.log(`[Auto-Pilot] Not enough new data for ${site.url} (${newLogs.length}/20). Skipping...`);
+            return;
+        }
 
-        console.log(`[Auto-Pilot] Analyzing behavior data for: ${site.url}`);
+        console.log(`[Auto-Pilot] Analyzing ${newLogs.length} new signals for: ${site.url}`);
 
-        // [Senior Strategy] Summarize logs to save tokens and focus on patterns
+        // 2. [Compression] Summarize new logs to minimize tokens
         const summary = {
-            total_events: logs.length,
-            paths: {},
-            clicks: [],
-            types: {}
+            total_new_events: newLogs.length,
+            top_paths: {},
+            top_clicks: {},
+            intents: { exit_intent: 0, cart_abandoned: 0, coupon_copied: 0 },
+            utm_sources: {}
         };
-        logs.forEach(l => {
-            summary.types[l.type] = (summary.types[l.type] || 0) + 1;
-            summary.paths[l.path] = (summary.paths[l.path] || 0) + 1;
-            if (l.type === 'click_interaction' && l.meta?.text) summary.clicks.push(l.meta.text);
+
+        newLogs.forEach(l => {
+            summary.top_paths[l.path] = (summary.top_paths[l.path] || 0) + 1;
+            if (l.type === 'click_interaction' && l.meta?.text) {
+                summary.top_clicks[l.meta.text] = (summary.top_clicks[l.meta.text] || 0) + 1;
+            }
+            if (summary.intents[l.type] !== undefined) summary.intents[l.type]++;
+            if (l.meta?.utm?.utm_source) {
+                summary.utm_sources[l.meta.utm.utm_source] = (summary.utm_sources[l.meta.utm.utm_source] || 0) + 1;
+            }
         });
 
+        // Current Latest Timestamp to save as next checkpoint
+        const currentLatestTs = newLogs[0].ts;
+
         const prompt = `
-            당신은 시니어 퍼포먼스 마케터입니다. 아래의 고객 행동 패턴 데이터를 분석하여 전환율을 높일 수 있도록 현재의 '마케팅 자동화 설정'을 최적화하세요.
+            당신은 시니어 퍼포먼스 마케터이자 데이터 분석가입니다. 아래의 최근 고객 행동 요약 데이터를 분석하여 전환율을 높일 수 있는 마케팅 자동화 전략을 제안하세요.
             
-            분석 대상 사이트: ${site.url}
-            최근 방문 패턴(Top 3 Paths): ${JSON.stringify(Object.entries(summary.paths).sort((a,b)=>b[1]-a[1]).slice(0,3))}
-            주요 클릭 요소: ${summary.clicks.slice(0,10).join(', ')}
-            이벤트 분포: ${JSON.stringify(summary.types)}
+            사이트: ${site.url}
+            분석 기간: ${lastAnalyzedTs} ~ ${currentLatestTs}
+            최근 주요 경로: ${JSON.stringify(Object.entries(summary.top_paths).sort((a,b)=>b[1]-a[1]).slice(0,5))}
+            클릭 상호작용: ${JSON.stringify(Object.entries(summary.top_clicks).sort((a,b)=>b[1]-a[1]).slice(0,5))}
+            고의도 시그널: ${JSON.stringify(summary.intents)}
+            유입 채널 분포: ${JSON.stringify(summary.utm_sources)}
             
-            기존 설정: ${JSON.stringify(site.scraped_data.automation)}
+            현재 설정: ${JSON.stringify(site.scraped_data.automation)}
 
-            --- 분석 및 최적화 지침 ---
-            1. '스크롤(scroll_depth)' 이탈이 잦은 경우 보상 위젯의 노출 조건(depth)을 조정하세요.
-            2. 클릭 요소나 페이지 경로를 참고하여, 이탈 방지나 넛지 문구를 해당 관심사에 맞게 개인화하세요.
-            3. 분석 결과는 반드시 아래 JSON 구조를 지켜야 하며, 한국어로 친절하고 전문적인 마케터의 어조로 'ai_opinion'을 작성하세요.
-            4. 'ai_opinion'에는 어떤 경로에서 이탈이 많은지, 어떤 마케팅 설정을 강화하면 좋을지 구체적인 수치나 경로명을 언급하며 조언을 포함하세요.
+            --- 분석 가이드 ---
+            - 'exit_intent'가 높으면 '이탈 방지 위젯(exit_intent)'의 혜택 문구를 더 자극적으로 변경하세요.
+            - 특정 상품 경로 방문이 많으면 해당 카테고리에 맞는 '개인화 넛지'를 제안하세요.
+            - 분석 결과는 반드시 아래 JSON 구조를 지키고, 한국어로 마케팅 의견을 'ai_opinion'에 상세히 작성하세요.
 
-            --- 응답 JSON 구조 (반드시 이 구조로만 응답하세요) ---
+            --- 응답 JSON ---
             {
-                "automation": {
-                    "social_proof": { "enabled": true, "template": "...", "conversion": "..." },
-                    "exit_intent": { "enabled": true, "text": "...", "conversion": "..." },
-                    "shipping_timer": { "enabled": true, "closing_hour": 16, "text": "...", "conversion": "..." },
-                    "scroll_reward": { "enabled": true, "depth": 50, "text": "...", "coupon": "...", "conversion": "..." },
-                    "rental_calc": { "enabled": true, "period": 24, "text": "...", "conversion": "..." },
-                    "inactivity_nudge": { "enabled": true, "idle_seconds": 20, "text": "...", "conversion": "..." },
-                    "tab_recovery": { "enabled": true, "text": "...", "conversion": "..." },
-                    "price_match": { "enabled": true, "text": "...", "conversion": "..." }
-                },
-                "ai_opinion": "여기에 시니어 마케터의 분석 의견을 작성하세요."
+                "automation": { (업데이트할 설정들) },
+                "ai_opinion": "구체적인 데이터 수치를 언급하며 제안하는 시니어 마케터의 조언"
             }
         `;
 
@@ -301,21 +355,34 @@ async function runAutoPilotOptimization(siteId) {
             // Always update opinion, but only update automation config if auto-pilot is ON
             const isAutoPilotOn = site.scraped_data.automation?.ai_auto_optimize === true;
             
-            if (isAutoPilotOn) {
-                await client.query(
-                    "UPDATE sites SET scraped_data = jsonb_set(jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{automation}', $1::jsonb), '{ai_opinion}', $2::jsonb) WHERE id = $3",
-                    [JSON.stringify(aiResult.automation), JSON.stringify(aiResult.ai_opinion), siteId]
-                );
-            } else {
-                await client.query(
-                    "UPDATE sites SET scraped_data = jsonb_set(COALESCE(scraped_data, '{}'::jsonb), '{ai_opinion}', $1::jsonb) WHERE id = $2",
-                    [JSON.stringify(aiResult.ai_opinion), siteId]
-                );
-            }
-            console.log(`[Auto-Pilot] Successfully updated AI opinion (and automation: ${isAutoPilotOn}) for ${site.url}`);
+            // New: Record AI Log for Dashboard & Update Checkpoint
+            const newLog = {
+                ts: new Date().toISOString(),
+                action: isAutoPilotOn ? "자동 설정 최적화 완료" : "AI 분석 완료 및 제안",
+                summary: `새로운 신호 ${newLogs.length}개 분석 완료`
+            };
+
+            await client.query(`
+                UPDATE sites 
+                SET scraped_data = scraped_data || jsonb_build_object(
+                    'ai_opinion', $1::text,
+                    'ai_last_analyzed_ts', $2::text,
+                    'ai_logs', (COALESCE(scraped_data->'ai_logs', '[]'::jsonb) || $3::jsonb)
+                ) || (CASE WHEN $4 = true THEN jsonb_build_object('automation', $5::jsonb) ELSE '{}'::jsonb END)
+                WHERE id = $6
+            `, [
+                aiResult.ai_opinion, 
+                currentLatestTs, 
+                JSON.stringify(newLog),
+                isAutoPilotOn,
+                JSON.stringify(aiResult.automation),
+                siteId
+            ]);
+            
+            console.log(`[Auto-Pilot] Successfully updated analysis for: ${site.url}`);
         }
     } catch (err) {
-        console.error(`[Auto-Pilot] Failed for Site ${siteId}:`, err);
+        console.error(`[Auto-Pilot] Error on site ${siteId}:`, err.message);
     } finally {
         client.release();
     }
@@ -566,12 +633,12 @@ app.get('/sdk.js', async (req, res) => {
         }
 
         const defaults = {
-            social_proof: { enabled: true, template: "{location} {customer}님이 {product}를 방금 구매했습니다!" },
-            exit_intent: { enabled: true, text: "잠시만요! 🏃‍♂️ 지금 나가시기엔 너무 아쉬운 혜택이 있어요..." },
-            shipping_timer: { enabled: true, closing_hour: 16, text: "오늘 배송 마감까지 {timer} 남았습니다! 지금 주문하면 {delivery_date} 도착 예정." },
-            scroll_reward: { enabled: true, depth: 80, text: "꼼꼼히 읽어주셔서 감사합니다! {product} 전용 시크릿 할인권을 드려요.", coupon: "SECRET10" },
-            rental_calc: { enabled: true, period: 24, text: "이 제품, 하루 {daily_price}원이면 충분합니다. (월 {monthly_price}원 / {period}개월 기준)" },
-            inactivity_nudge: { enabled: true, idle_seconds: 30, text: "혹시 더 궁금한 점이 있으신가요? {customer}님만을 위한 가이드를 확인해보세요!" }
+            social_proof: { enabled: false, template: "{location} {customer}님이 {product}를 방금 구매했습니다!" },
+            exit_intent: { enabled: false, text: "잠시만요! 🏃‍♂️ 지금 나가시기엔 너무 아쉬운 혜택이 있어요..." },
+            shipping_timer: { enabled: false, closing_hour: 16, text: "오늘 배송 마감까지 {timer} 남았습니다! 지금 주문하면 {delivery_date} 도착 예정." },
+            scroll_reward: { enabled: false, depth: 80, text: "꼼꼼히 읽어주셔서 감사합니다! {product} 전용 시크릿 할인권을 드려요.", coupon: "SECRET10" },
+            rental_calc: { enabled: false, period: 24, text: "이 제품, 하루 {daily_price}원이면 충분합니다. (월 {monthly_price}원 / {period}개월 기준)" },
+            inactivity_nudge: { enabled: false, idle_seconds: 30, text: "혹시 더 궁금한 점이 있으신가요? {customer}님만을 위한 가이드를 확인해보세요!" }
         };
 
         const config = isVerified ? {
@@ -764,12 +831,15 @@ app.get('/sdk.js', async (req, res) => {
                 const loc = locations[Math.floor(Math.random() * locations.length)];
                 const cust = customers[Math.floor(Math.random() * customers.length)];
                 const prod = products[Math.floor(Math.random() * products.length)];
-                showToast(config.social_proof.template.replace('{location}', '<b>'+loc+'</b>').replace('{customer}', '<b>'+cust+'</b>').replace('{product}', '<b>'+prod+'</b>'));
+                const msg = config.social_proof.template.replace('{location}', '<b>'+loc+'</b>').replace('{customer}', '<b>'+cust+'</b>').replace('{product}', '<b>'+prod+'</b>');
+                showToast(msg);
+                LearningEngine.pulse('social_proof', { message: msg });
             }, 20000);
         }
 
         // 2. Shipping Countdown
         if (config.shipping_timer?.enabled) {
+            let timerShowed = false;
             function updateTimer() {
                 const now = new Date();
                 const deadline = new Date();
@@ -793,6 +863,10 @@ app.get('/sdk.js', async (req, res) => {
                     timerEl.id = 'bn-shipping-timer';
                     timerEl.style = "position: sticky; top: 0; width: 100%; background: #ebf5ff; color: #2980b9; padding: 10px; text-align: center; font-size: 13px; font-weight: bold; z-index: 1000001; border-bottom: 1px solid #d6eaf8;";
                     document.body.prepend(timerEl);
+                    if (!timerShowed) {
+                        LearningEngine.pulse('shipping_timer', { text: config.shipping_timer.text });
+                        timerShowed = true;
+                    }
                 }
                 timerEl.innerHTML = config.shipping_timer.text.replace('{timer}', '<span style="color: #e74c3c;">' + timerStr + '</span>').replace('{delivery_date}', '<b>' + dateStr + '</b>');
             }
@@ -814,10 +888,21 @@ app.get('/sdk.js', async (req, res) => {
                         <h3 style="margin-top:0">🎉 시크릿 혜택 발견!</h3>
                         <p style="font-size:14px; color:#666;">\${config.scroll_reward.text.replace('{product}', '<b>'+prod+'</b>')}</p>
                         <div style="background:#f9f9f9; padding:15px; border:2px dashed #ddd; font-size:20px; font-weight:bold; margin:20px 0; color:#e67e22;">\${config.scroll_reward.coupon}</div>
-                        <button onclick="navigator.clipboard.writeText('\${config.scroll_reward.coupon}'); alert('쿠폰이 복사되었습니다!'); this.parentElement.remove();" style="background:#e67e22; color:white; border:none; padding:12px 30px; border-radius:10px; cursor:pointer; width:100%; font-weight:bold;">쿠폰 복사하고 혜택받기</button>
-                        <div onclick="this.parentElement.remove()" style="margin-top:15px; font-size:12px; color:#999; cursor:pointer; text-decoration:underline;">다음에 받을게요</div>
+                        <button id="bn-coupon-copy" style="background:#e67e22; color:white; border:none; padding:12px 30px; border-radius:10px; cursor:pointer; width:100%; font-weight:bold;">쿠폰 복사하고 혜택받기</button>
+                        <div id="bn-coupon-close" style="margin-top:15px; font-size:12px; color:#999; cursor:pointer; text-decoration:underline;">다음에 받을게요</div>
                     \`;
                     document.body.appendChild(popup);
+                    LearningEngine.pulse('scroll_reward_show', { depth: config.scroll_reward.depth });
+
+                    document.getElementById('bn-coupon-copy').onclick = function() {
+                        navigator.clipboard.writeText(config.scroll_reward.coupon);
+                        alert('쿠폰이 복사되었습니다!');
+                        LearningEngine.pulse('scroll_reward_claim', { coupon: config.scroll_reward.coupon });
+                        popup.remove();
+                    };
+                    document.getElementById('bn-coupon-close').onclick = function() {
+                        popup.remove();
+                    };
                 }
             });
         }
@@ -843,6 +928,7 @@ app.get('/sdk.js', async (req, res) => {
 
                         calcBtn.onclick = (e) => {
                             e.stopPropagation();
+                            LearningEngine.pulse('rental_calc_click', { price: price });
                             alert(config.rental_calc.text
                                 .replace('{daily_price}', daily.toLocaleString())
                                 .replace('{monthly_price}', monthly.toLocaleString())
@@ -864,6 +950,7 @@ app.get('/sdk.js', async (req, res) => {
                     nudge.className = "bn-widget bn-nudge";
                     nudge.innerHTML = "💬 " + config.inactivity_nudge.text.replace('{customer}', '고객');
                     document.body.appendChild(nudge);
+                    LearningEngine.pulse('inactivity_nudge', { text: config.inactivity_nudge.text });
                     setTimeout(() => nudge.remove(), 8000);
                 }, config.inactivity_nudge.idle_seconds * 1000);
             };
@@ -878,6 +965,7 @@ app.get('/sdk.js', async (req, res) => {
                 if (e.clientY < 0 && !showed) {
                     showed = true;
                     showToast("🎁 " + config.exit_intent.text, 8000);
+                    LearningEngine.pulse('exit_intent', { text: config.exit_intent.text });
                 }
             });
         }
@@ -923,9 +1011,11 @@ app.post('/api/sites/:id/automation', isAuthenticated, async (req, res) => {
 
 // 2. Organization Routes
 app.post('/api/debug/set-plan', isAuthenticated, async (req, res) => {
+    if (BETA_MODE) return res.status(403).json({ error: "BETA MODE가 활성화되어 있어 플랜을 수동으로 변경할 수 없습니다. 현재 전원 Pro 혜택이 적용 중입니다." });
+
     const { organization_id, plan } = req.body;
     if (!['free', 'starter', 'pro'].includes(plan)) return res.status(400).json({ error: "Invalid plan" });
-    
+
     // Store plan in session for debugging/dev
     req.session.debug_plan = plan;
     req.session.save((err) => {
@@ -933,7 +1023,6 @@ app.post('/api/debug/set-plan', isAuthenticated, async (req, res) => {
         res.json({ success: true, plan });
     });
 });
-
 app.post('/api/organizations', isAuthenticated, async (req, res) => {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: "Organization name is required" });
@@ -1137,19 +1226,277 @@ app.get('/api/usage', isAuthenticated, async (req, res) => {
         if (orgRes.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this organization." });
 
         const count = await getUsage(organization_id);
-        const plan = req.session.debug_plan || 'free';
-        let limit = 1;
-        if (plan === 'starter') limit = 10;
-        if (plan === 'pro') limit = 30;
+        const planInfo = getPlanDetails(req);
 
-        res.json({ used: count, limit: limit, plan: plan });
-    } catch (err) {
+        res.json({
+            used: count,
+            limit: planInfo.limit,
+            plan: planInfo.plan,
+            isBeta: planInfo.isBeta
+        });
+        } catch (err) {
         res.status(500).json({ error: "Usage check failed" });
+        } finally {
+        client.release();
+        }
+        });
+
+        app.get('/api/dashboard/stats', isAuthenticated, async (req, res) => {
+        let { organization_id } = req.query;
+        if (!organization_id) return res.status(400).json({ error: "Org ID is required" });
+
+        // Decode public ID if needed
+        if (typeof organization_id === 'string' && organization_id.includes('-')) {
+        const decoded = decodeOrgId(organization_id);
+        if (!decoded) return res.status(403).json({ error: "Invalid Org ID" });
+        organization_id = decoded;
+        }
+
+        const client = await pool.connect();
+        try {
+        // [Security] Verify ownership
+        const orgCheck = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [organization_id, req.user.id]);
+        if (orgCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access" });
+
+        // Get all sites for this org to process their logs
+        const sitesRes = await client.query("SELECT id, url, seo_score, scraped_data FROM sites WHERE organization_id = $1 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at')", [organization_id]);
+        const sites = sitesRes.rows;
+
+        let totalRecovered = 0;
+        let totalPrevention = 0;
+        let totalVisitors24h = 0;
+        let avgSeo = 0;
+        let allLogs = [];
+        const revenueTrend = [0, 0, 0, 0, 0, 0, 0]; // Last 7 days
+        const now = new Date();
+        const oneDayMs = 24 * 60 * 60 * 1000;
+
+        if (sites.length > 0) {
+            let seoSum = 0;
+            sites.forEach(site => {
+                seoSum += (site.seo_score || 0);
+                const logs = site.scraped_data?.behavior_logs || [];
+
+                logs.forEach(log => {
+                    const logDate = new Date(log.ts);
+                    const diffDays = Math.floor((now - logDate) / oneDayMs);
+
+                    // Prevention events
+                    const isPrevention = ['exit_intent', 'cart_abandoned', 'scroll_reward_claim', 'coupon_copied'].includes(log.type);
+
+                    if (diffDays < 7) {
+                        if (isPrevention) {
+                            totalPrevention++;
+                            totalRecovered += 50000; // Mock value: ₩50,000 per recovery
+                            revenueTrend[6 - diffDays] += 50000;
+                        }
+                    }
+
+                    if (diffDays === 0) {
+                        totalVisitors24h++;
+                    }
+
+                    // Filter for marketing automation events for the real-time log
+                    const isAutomationEvent = [
+                        'scroll_reward_claim',
+                        'rental_calc_click',
+                        'coupon_copied',
+                        'cart_abandoned'
+                    ].includes(log.type);
+                    if (isAutomationEvent) {
+                        allLogs.push({
+                            ...log,
+                            site_url: site.url
+                        });
+                    }
+                });
+            });
+            avgSeo = Math.round(seoSum / sites.length);
+        }
+
+        // 4. Marketing Insights Logic (Integrated)
+        const utmPerformance = {};
+        const funnelData = {};
+        let widgetConv = 0, nonWidgetConv = 0, widgetViews = 0, nonWidgetViews = 0;
+        const aiOptimizationLogs = [];
+
+        sites.forEach(site => {
+            const sLogs = site.scraped_data?.behavior_logs || [];
+            const sAiLogs = site.scraped_data?.ai_logs || [];
+            if (sAiLogs.length > 0) aiOptimizationLogs.push(...sAiLogs.map(l => ({ ...l, site_url: site.url })));
+
+            sLogs.forEach(log => {
+                const source = log.meta?.utm?.utm_source || 'organic';
+                if (!utmPerformance[source]) utmPerformance[source] = { views: 0, reactions: 0 };
+                
+                if (log.type === 'page_view') {
+                    utmPerformance[source].views++;
+                    if (!funnelData[log.path]) funnelData[log.path] = { views: 0, exits: 0 };
+                    funnelData[log.path].views++;
+                    if (Math.random() > 0.5) nonWidgetViews++; else widgetViews++;
+                }
+
+                const isReaction = ['scroll_reward_claim', 'rental_calc_click', 'coupon_copied', 'cart_abandoned', 'exit_intent'].includes(log.type);
+                if (isReaction) {
+                    utmPerformance[source].reactions++;
+                    widgetConv++;
+                }
+                if (log.type === 'form_submit' || log.type === 'purchase') nonWidgetConv++;
+            });
+        });
+
+        const sortedFunnel = Object.entries(funnelData)
+            .map(([path, data]) => ({ path, ...data, rate: Math.round((data.exits / data.views) * 100) || 0 }))
+            .sort((a, b) => b.views - a.views).slice(0, 5);
+
+        const formattedUtm = Object.entries(utmPerformance).map(([source, data]) => ({
+            source, ...data, cvr: data.views > 0 ? ((data.reactions / data.views) * 100).toFixed(1) : 0
+        })).sort((a, b) => b.views - a.views);
+
+        // Sort logs by timestamp desc
+        allLogs.sort((a, b) => new Date(b.ts) - new Date(a.ts));
+        const recentLogs = allLogs.slice(0, 10);
+
+        res.json({
+            recovered: totalRecovered,
+            prevention: totalPrevention,
+            visitors: totalVisitors24h,
+            seo: avgSeo,
+            revenueData: revenueTrend,
+            eventLog: recentLogs,
+            // Integrated Insights
+            attribution: {
+                widget: { views: widgetViews, conv: widgetConv, cvr: widgetViews > 0 ? ((widgetConv/widgetViews)*100).toFixed(1) : 0 },
+                nonWidget: { views: nonWidgetViews, conv: nonWidgetConv, cvr: nonWidgetViews > 0 ? ((nonWidgetConv/nonWidgetViews)*100).toFixed(1) : 0 }
+            },
+            utm: formattedUtm,
+            funnel: sortedFunnel,
+            aiLogs: aiOptimizationLogs.sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 10)
+        });
+        } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch dashboard stats" });
+        } finally {
+        client.release();
+        }
+        });
+
+app.get('/api/marketing-insights', isAuthenticated, async (req, res) => {
+    let { organization_id } = req.query;
+    if (!organization_id) return res.status(400).json({ error: "Org ID required" });
+
+    if (typeof organization_id === 'string' && organization_id.includes('-')) {
+        const decoded = decodeOrgId(organization_id);
+        if (decoded) organization_id = decoded;
+    }
+
+    const client = await pool.connect();
+    try {
+        const orgCheck = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [organization_id, req.user.id]);
+        if (orgCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized access" });
+
+        const sitesRes = await client.query("SELECT id, url, scraped_data FROM sites WHERE organization_id = $1 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at')", [organization_id]);
+        const sites = sitesRes.rows;
+
+        // Analytics structure
+        const utmPerformance = {}; // { source: { clicks: 0, conv: 0 } }
+        const funnelData = {}; // { path: { views: 0, exits: 0 } }
+        let widgetConv = 0;
+        let nonWidgetConv = 0;
+        let widgetViews = 0;
+        let nonWidgetViews = 0;
+        const aiOptimizationLogs = [];
+
+        sites.forEach(site => {
+            const logs = site.scraped_data?.behavior_logs || [];
+            const aiLogs = site.scraped_data?.ai_logs || [];
+            if (aiLogs.length > 0) aiOptimizationLogs.push(...aiLogs.map(l => ({ ...l, site_url: site.url })));
+
+            // 1. Group logs by session to find real exits
+            const sessionMap = {}; // { session_id: [logs] }
+            logs.forEach(log => {
+                const sid = log.sid || log.meta?.sid || 'anonymous';
+                if (!sessionMap[sid]) sessionMap[sid] = [];
+                sessionMap[sid].push(log);
+            });
+
+            // 2. Identify the last page of each session
+            Object.values(sessionMap).forEach(sLogs => {
+                const pageViews = sLogs.filter(l => l.type === 'page_view')
+                                       .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+                
+                if (pageViews.length > 0) {
+                    const lastPage = pageViews[pageViews.length - 1];
+                    if (!funnelData[lastPage.path]) funnelData[lastPage.path] = { views: 0, exits: 0 };
+                    lastPage._is_exit = true; // Mark for later
+                }
+            });
+
+            // 3. Process all logs for general stats
+            logs.forEach(log => {
+                const source = log.meta?.utm?.utm_source || 'organic';
+                if (!utmPerformance[source]) utmPerformance[source] = { views: 0, reactions: 0 };
+                
+                if (log.type === 'page_view') {
+                    utmPerformance[source].views++;
+                    if (!funnelData[log.path]) funnelData[log.path] = { views: 0, exits: 0 };
+                    funnelData[log.path].views++;
+                    
+                    if (log._is_exit) {
+                        funnelData[log.path].exits++;
+                    }
+
+                    if (Math.random() > 0.5) nonWidgetViews++;
+                    else widgetViews++;
+                }
+
+                const isReaction = ['scroll_reward_claim', 'rental_calc_click', 'coupon_copied', 'cart_abandoned', 'exit_intent'].includes(log.type);
+                if (isReaction) {
+                    utmPerformance[source].reactions++;
+                    widgetConv++;
+                }
+
+                if (log.type === 'form_submit' || log.type === 'purchase') {
+                    nonWidgetConv++; 
+                }
+            });
+        });
+
+        // Format Funnel (Focus on Meaningful Leaks: Filter 0% and Low Traffic)
+        const sortedFunnel = Object.entries(funnelData)
+            .map(([path, data]) => ({ 
+                path, 
+                ...data, 
+                rate: data.views > 0 ? parseFloat(((data.exits / data.views) * 100).toFixed(2)) : 0 
+            }))
+            .filter(f => f.rate > 0 && f.views >= 5) // Meaningful: Must have exits and at least 5 views
+            .sort((a, b) => b.exits - a.exits) // Business Impact: Most people lost first
+            .slice(0, 5);
+
+        // Format UTM Performance
+        const formattedUtm = Object.entries(utmPerformance).map(([source, data]) => ({
+            source,
+            ...data,
+            cvr: ((data.reactions / data.views) * 100).toFixed(1)
+        })).sort((a, b) => b.views - a.views);
+
+        res.json({
+            attribution: {
+                widget: { views: widgetViews, conv: widgetConv, cvr: ((widgetConv/widgetViews)*100).toFixed(1) },
+                nonWidget: { views: nonWidgetViews, conv: nonWidgetConv, cvr: ((nonWidgetConv/nonWidgetViews)*100).toFixed(1) }
+            },
+            utm: formattedUtm,
+            funnel: sortedFunnel,
+            revenueRecovered: widgetConv * 50000,
+            aiLogs: aiOptimizationLogs.sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 10)
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch marketing insights" });
     } finally {
         client.release();
     }
 });
-
 async function fetchAndParseSitemap(url, allUrls = [], visited = new Set()) {
     if (visited.has(url) || allUrls.length >= 500) return allUrls;
     visited.add(url);
@@ -1351,25 +1698,75 @@ app.get('/api/sites/detail/:id', isAuthenticated, async (req, res) => {
     }
 });
 
-async function scrapeUrl(url) {
+// --- Robust JSON Parser for AI Responses ---
+function robustJSONParse(str) {
+    if (!str) return null;
+    
+    // Extract everything between the first '{' and the last '}'
+    const jsonMatch = str.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    
+    let cleanStr = jsonMatch[0];
+    
+    try {
+        // First try standard parse
+        return JSON.parse(cleanStr);
+    } catch (e) {
+        console.warn("[JSON Parser] Standard parse failed, attempting cleanup...");
+        
+        try {
+            // Attempt secondary cleanup:
+            // 1. Remove single-line comments (// ...)
+            // 2. Remove trailing commas before closing braces/brackets
+            cleanStr = cleanStr
+                .replace(/\/\/.*$/gm, '') 
+                .replace(/,(\s*[\]\}])/g, '$1')
+                .trim();
+            
+            return JSON.parse(cleanStr);
+        } catch (e2) {
+            console.error("[JSON Parser] Critical parse error. Raw string snippet:", cleanStr.substring(0, 200) + "...");
+            throw e2;
+        }
+    }
+}
+
+async function scrapeUrl(url, device = 'desktop') {
     let browser;
     try {
-        console.log(`[Playwright] Launching browser for: ${url}`);
-        browser = await chromium.launch({ 
+        console.log(`[Playwright] Launching browser for: ${url} (${device})`);
+        browser = await chromium.launch({
             headless: true,
             args: [
-                '--no-sandbox', 
+                '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu'
             ]
         });
+
+        const deviceConfigs = {
+            desktop: {
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                viewport: { width: 1440, height: 900 }
+            },
+            mobile: {
+                userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+                viewport: { width: 390, height: 844 },
+                isMobile: true,
+                hasTouch: true
+            }
+        };
+
+        const config = deviceConfigs[device] || deviceConfigs.desktop;
+
         const context = await browser.newContext({
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-            viewport: { width: 1280, height: 800 },
+            userAgent: config.userAgent,
+            viewport: config.viewport,
+            isMobile: config.isMobile || false,
+            hasTouch: config.hasTouch || false,
             ignoreHTTPSErrors: true
-        });
-        const page = await context.newPage();
+        });        const page = await context.newPage();
         
         console.log(`[Playwright] Navigation started...`);
         // Use 'networkidle' for more complete content capture, but with a reasonable timeout
@@ -1422,56 +1819,262 @@ async function scrapeUrl(url) {
     }
 }
 
+// Helper to get raw PDF buffer
+async function generatePDFBuffer(siteData, siteUrl) {
+    let browser;
+    try {
+        browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+        const context = await browser.newContext();
+        const page = await context.newPage();
+
+        const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+                <style>
+                    body { font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; padding: 40px; color: #2c3e50; line-height: 1.6; }
+                    .header { border-bottom: 2px solid #3498db; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; }
+                    .logo { font-size: 24px; font-weight: bold; color: #2c3e50; }
+                    .seo-score { font-size: 48px; font-weight: 800; color: #2ecc71; }
+                    .section-title { border-left: 5px solid #3498db; padding-left: 15px; margin: 30px 0 15px; font-weight: bold; font-size: 18px; break-after: avoid; }
+                    .advice-card { background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 10px; height: 100%; border: 1px solid #eee; break-inside: avoid; }
+                    .advice-title { font-weight: bold; font-size: 13px; color: #7f8c8d; margin-bottom: 5px; text-transform: uppercase; }
+                    .ceo-msg { white-space: pre-wrap; background: #fffcf0; border: 1px solid #f1e7bc; padding: 20px; border-radius: 10px; font-style: italic; break-inside: avoid; }
+                    .badge-aio { padding: 8px 12px; border-radius: 8px; font-weight: bold; font-size: 12px; }
+                    .bg-good { background: #e8f8f5; color: #27ae60; }
+                    .bg-warning { background: #fef9e7; color: #f39c12; }
+                    .bg-bad { background: #fdedec; color: #e74c3c; }
+                    .row { break-inside: avoid; }
+                    @media print {
+                        .section-title, .advice-card, .ceo-msg, .row { break-inside: avoid; page-break-inside: avoid; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div class="logo">Bright Networks <span style="font-weight: normal; color: #95a5a6;">| AI SEO Report</span></div>
+                    <div class="text-end">
+                        <div class="small text-muted">분석 일시: ${new Date(siteData.analyzed_at || new Date()).toLocaleString('ko-KR')}</div>
+                        <div class="small fw-bold text-primary">${siteUrl}</div>
+                    </div>
+                </div>
+
+                <div class="row align-items-stretch mb-4">
+                    <div class="col-4 text-center d-flex flex-column justify-content-center">
+                        <div class="text-muted small mb-1">종합 SEO 점수</div>
+                        <div class="seo-score">${siteData.seo_score}</div>
+                        <div class="text-muted extra-small">최적화 완료</div>
+                    </div>
+                    <div class="col-8">
+                        <h5 class="fw-bold mb-3">AI 비즈니스 요약</h5>
+                        <p class="text-muted small">${siteData.summary || '분석된 요약 정보가 없습니다.'}</p>
+                    </div>
+                </div>
+
+                <div class="section-title">Senior Marketer's Insight</div>
+                <div class="ceo-msg mb-4 small">${siteData.ceo_message || '분석 의견을 준비 중입니다.'}</div>
+
+                <div class="section-title">AIO (AI 검색 최적화) 지수</div>
+                <div class="row text-center mb-4">
+                    <div class="col-4">
+                        <div class="advice-card">
+                            <div class="advice-title">ChatGPT</div>
+                            <span class="badge-aio ${getAioClass(siteData.ai_visibility?.chatgpt_readiness)}">${siteData.ai_visibility?.chatgpt_readiness || '-'}</span>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="advice-card">
+                            <div class="advice-title">Perplexity</div>
+                            <span class="badge-aio ${getAioClass(siteData.ai_visibility?.perplexity_readiness)}">${siteData.ai_visibility?.perplexity_readiness || '-'}</span>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="advice-card">
+                            <div class="advice-title">Gemini</div>
+                            <span class="badge-aio ${getAioClass(siteData.ai_visibility?.gemini_readiness)}">${siteData.ai_visibility?.gemini_readiness || '-'}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-title">분야별 최적화 가이드</div>
+                <div class="row g-3">
+                    <div class="col-6"><div class="advice-card"><div class="advice-title">🏷️ 메타 정보</div><div class="small">${siteData.advice?.meta || '-'}</div></div></div>
+                    <div class="col-6"><div class="advice-card"><div class="advice-title">🏗️ 사이트 구조</div><div class="small">${siteData.advice?.semantics || '-'}</div></div></div>
+                    <div class="col-6"><div class="advice-card"><div class="advice-title">🖼️ 이미지 최적화</div><div class="small">${siteData.advice?.images || '-'}</div></div></div>
+                    <div class="col-6"><div class="advice-card"><div class="advice-title">🔗 연결성</div><div class="small">${siteData.advice?.links || '-'}</div></div></div>
+                    <div class="col-12"><div class="advice-card"><div class="advice-title">💎 구조화 데이터 (Schema.org)</div><div class="small">${siteData.advice?.schemas || '-'}</div></div></div>
+                </div>
+
+                <div class="mt-5 p-4 bg-light rounded text-center small text-muted" style="font-size: 10px;">
+                    본 리포트는 Bright Networks의 AI 엔진에 의해 자동 생성되었습니다. <br>
+                    더 자세한 대시보드 확인은 <a href="https://marine.brightnetworks.kr">marine.brightnetworks.kr</a>에서 가능합니다.
+                </div>
+            </body>
+            </html>
+        `;
+
+        function getAioClass(status) {
+            if (!status) return '';
+            if (status.toLowerCase().includes('good')) return 'bg-good';
+            if (status.toLowerCase().includes('warning')) return 'bg-warning';
+            return 'bg-bad';
+        }
+
+        await page.setContent(htmlContent);
+        return await page.pdf({ format: 'A4', printBackground: true });
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+// --- PDF & Email Helper ---
+async function generateAndSendPDFReport(email, siteData, siteUrl) {
+    if (!process.env.RESEND_API_KEY) {
+        console.warn("[Email] RESEND_API_KEY missing, skipping PDF email.");
+        return;
+    }
+
+    try {
+        const pdfBuffer = await generatePDFBuffer(siteData, siteUrl);
+        const hostname = new URL(siteUrl).hostname;
+
+        await resend.emails.send({
+            from: 'Bright Networks <seo@updates.brightnetworks.kr>',
+            to: email,
+            subject: `[Bright Networks] ${hostname} AI SEO 분석 리포트`,
+            html: `<p>안녕하세요,</p><p>요청하신 <b>${siteUrl}</b>의 AI SEO 분석이 완료되었습니다. 첨부된 PDF 리포트를 확인해주세요.</p><p>감사합니다.<br>Bright Networks 팀 드림</p>`,
+            attachments: [
+                {
+                    filename: `BrightNetworks_SEO_Report_${hostname}.pdf`,
+                    content: pdfBuffer,
+                },
+            ],
+        });
+        console.log(`[Email] Report sent successfully to ${email}`);
+    } catch (err) {
+        console.error("[PDF/Email] Error:", err);
+    }
+}
+
+// --- Report Export Endpoints ---
+
+app.get('/api/reports/:id/pdf', isAuthenticated, async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    try {
+        const result = await client.query(
+            "SELECT s.* FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: "Report not found" });
+        
+        const site = result.rows[0];
+        if (site.scraped_data?.status !== 'active') return res.status(400).json({ error: "Analysis not complete" });
+
+        const pdfBuffer = await generatePDFBuffer(site.scraped_data, site.url);
+        const filename = `SEO_Report_${new URL(site.url).hostname}.pdf`;
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(pdfBuffer);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "PDF generation failed" });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/reports/:id/email', isAuthenticated, async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    try {
+        const result = await client.query(
+            "SELECT s.* FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: "Report not found" });
+        
+        const site = result.rows[0];
+        if (site.scraped_data?.status !== 'active') return res.status(400).json({ error: "Analysis not complete" });
+
+        // Trigger email asynchronously
+        generateAndSendPDFReport(req.user.email, site.scraped_data, site.url);
+        
+        res.json({ success: true, message: `${req.user.email}로 리포트 발송을 시작했습니다.` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Email request failed" });
+    } finally {
+        client.release();
+    }
+});
+
 // --- Analysis Engine ---
 
-async function processSiteAnalysis(siteId) {
+async function processSiteAnalysis(siteId, userEmail = null) {
     const client = await pool.connect();
     try {
         const res = await client.query("SELECT * FROM sites WHERE id = $1", [siteId]);
         const site = res.rows[0];
         if (!site) return;
 
-        console.log(`[Auto-Analysis] Starting analysis for: ${site.url}`);
-        const { seoData, markdown, screenshotName } = await scrapeUrl(site.url);
+        const device = site.scraped_data?.device || 'desktop';
+        console.log(`[Auto-Analysis] Starting analysis for: ${site.url} (Device: ${device})`);
+        const { seoData, markdown, screenshotName } = await scrapeUrl(site.url, device);
 
         const prompt = `
-            당신은 세계 최고의 쇼핑몰 CRO(전환율 최적화) 전문가이자 'GEO(Generative Engine Optimization)' 전략가입니다. 
-            제공된 데이터를 바탕으로 고객사 쇼핑몰의 전환율을 극대화하고, ChatGPT/Perplexity와 같은 AI 검색 엔진에 최적으로 노출되기 위한 전략을 생성하세요.
+            당신은 세계 최고의 쇼핑몰 CRO(전환율 최적화) 전문가이자 10년차 이상의 시니어 퍼포먼스 마케터입니다.
+            제공된 데이터를 바탕으로 비즈니스 성장을 위한 냉철하고 실행 가능한 전략 리포트를 생성하세요.
+
+            --- 작업 지침 ---
+            1. **어조:** '대표님'과 같은 불필요한 호칭은 생략하고, 전문적이고 간결한 비즈니스 문체를 사용하세요.
+            2. **형식:** 개조식(Bullet points)으로 작성하여 가독성을 극대화하세요.
+            3. **리포트 구조 (ceo_message 필드에 아래 순서로 작성):**
+               - [현 상태 분석]: 데이터 기반의 현재 상황 진단
+               - [발견된 이슈]: 전환을 방해하는 핵심 문제점 (기술적/마케팅적)
+               - [해결 방법]: 이슈를 해결하기 위한 구체적인 액션 아이템
+               - [예상 효과]: 조치 후 기대되는 정량적/정성적 성과
+            4. 응답은 반드시 지정된 JSON 구조를 유지하고 주석이나 마지막 쉼표를 남기지 마세요.
 
             --- 수집된 기술적 SEO 데이터 ---
             ${JSON.stringify(seoData)}
-            
+
             --- 페이지 콘텐츠 요약 (Markdown) ---
             ${markdown}
-            
-            --- 작업 지침 ---
-            1. 사이트의 분위기(톤앤매너)에 어울리는 마케팅 문구를 작성하세요.
-            2. 상품 가격대를 분석하여 '렌탈 계산기' 활성 여부와 할부 기간(12, 24, 36, 48)을 결정하세요. (5만원 이상 상품 존재 시 활성화 권장)
-            3. 배송 관련 언급이 있다면 '배송 타이머' 문구에 반영하세요.
-            4. '스크롤 보상' 쿠폰명은 브랜드명과 어울리게 지어주세요.
-            5. **시멘틱 최적화 섹션:** 메타 title, keywords, description, canonical 태그를 반드시 포함하여 추천 코드를 생성하세요. SEO 점수를 위해 <h1> 태그는 반드시 사용하되, display:none이나 0px 등 숨김 처리 기법은 절대 사용하지 마세요.
-            6. **GEO 섹션:** 단순 메타태그가 아니라, AI가 브랜드의 신뢰도와 전문성을 이해할 수 있도록 '지식 그래프' 관점의 JSON-LD 스키마와 'Semantic Context' 데이터를 구성하세요. (FAQ, Product, Review 스키마 등 활용)
 
             --- 응답 JSON 구조 (필수 포함) ---
             {
                 "seo_score": (0~100 숫자),
-                "summary": "비즈니스 핵심 요약",
-                "advice": { "semantics": "...", "meta": "...", "images": "...", "schemas": "...", "links": "..." },
-                "automation_recommendations": {
-                    "social_proof": { "enabled": true, "template": "..." },
-                    "exit_intent": { "enabled": true, "text": "..." },
-                    "shipping_timer": { "enabled": true, "closing_hour": 16, "text": "..." },
-                    "scroll_reward": { "enabled": true, "depth": 80, "text": "...", "coupon": "..." },
-                    "rental_calc": { "enabled": (true/false), "period": (12/24/36/48), "text": "..." },
-                    "inactivity_nudge": { "enabled": true, "idle_seconds": 30, "text": "..." },
-                    "tab_recovery": { "enabled": true, "text": "..." },
-                    "price_match": { "enabled": true, "text": "..." }
-                },
+                "summary": "비즈니스 모델 및 핵심 타겟 분석",
+                "ceo_message": "[현 상태 분석] ...\\n[발견된 이슈] ...\\n[해결 방법] ...\\n[예상 효과] ...",
                 "detected_products": ["상품1", "상품2"],
-                "ceo_message": "...",
-                "sample_codes": { 
-                    "seo": "시멘틱 최적화를 위한 필수 메타 태그(title, keywords, description, canonical) 및 HTML 구조 가이드. (주의: <h1> 태그에 display:none을 사용하지 마세요)", 
-                    "geo": "AI 검색 엔진을 위한 고급 JSON-LD 및 컨텍스트 데이터" 
+                "advice": {
+                    "meta": "메타 정보 개선 제안",
+                    "semantics": "HTML 구조 및 시멘틱 개선 제안",
+                    "images": "이미지 최적화 제안",
+                    "links": "내부/외부 링크 구조 제안",
+                    "schemas": "구조화 데이터 적용 제안"
+                },
+                "ai_visibility": {
+                    "score": (0~100 숫자),
+                    "chatgpt_readiness": "Good/Warning/Bad",
+                    "perplexity_readiness": "Good/Warning/Bad",
+                    "gemini_readiness": "Good/Warning/Bad",
+                    "improvement_tip": "AI 검색 노출을 위한 핵심 팁"
+                },
+                "automation_recommendations": {
+                    "exit_intent": { "enabled": true, "text": "문구" },
+                    "scroll_reward": { "enabled": true, "depth": 70, "coupon": "쿠폰명", "text": "문구" },
+                    "social_proof": { "enabled": true, "template": "문구" },
+                    "shipping_timer": { "enabled": true, "closing_hour": 15, "text": "문구" },
+                    "rental_calc": { "enabled": true, "period": 24, "text": "문구" },
+                    "inactivity_nudge": { "enabled": true, "idle_seconds": 30, "text": "문구" }
+                },
+                "sample_codes": {
+                    "seo": "추천 HTML 코드",
+                    "geo": "추천 JSON-LD 코드"
                 }
             }
         `;
@@ -1479,18 +2082,18 @@ async function processSiteAnalysis(siteId) {
         // --- AI Analysis with Intelligent Retry (Handling 429 & 503) ---
         let result = null;
         let attempts = 0;
-        const maxAttempts = 5; // 재시도 횟수 상향
-        
+        const maxAttempts = 5; 
+
         while (attempts < maxAttempts) {
             try {
                 result = await model.generateContent(prompt);
-                if (result) break; // Success!
+                if (result) break;
             } catch (err) {
                 attempts++;
                 const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
-                
+
                 if (isRateLimit) {
-                    const delaySeconds = 60; // 대기 시간 60초로 연장
+                    const delaySeconds = 60; 
                     console.warn(`[AI] Rate limit hit (429). Waiting ${delaySeconds}s before attempt ${attempts + 1}...`);
                     await new Promise(r => setTimeout(r, delaySeconds * 1000));
                 } else {
@@ -1500,13 +2103,12 @@ async function processSiteAnalysis(siteId) {
                 }
             }
         }
-        
+
         if (!result) throw new Error("AI 분석 결과 생성에 실패했습니다 (최대 재시도 초과)");
         const textResponse = result.response.text();
-        
-        let aiResult = {};
-        const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) aiResult = JSON.parse(jsonMatch[0]);
+
+        const aiResult = robustJSONParse(textResponse);
+        if (!aiResult) throw new Error("AI 응답에서 유효한 JSON을 추출할 수 없습니다.");
 
         // Archive current data to history before updating
         const currentData = site.scraped_data || {};
@@ -1522,26 +2124,33 @@ async function processSiteAnalysis(siteId) {
         // Limit history to last 10 runs to save space
         const limitedHistory = history.slice(0, 10);
 
+        const finalData = { 
+            ...aiResult, 
+            automation: aiResult.automation_recommendations,
+            learning_progress: 25,
+            event_count: 0,
+            raw_seo: seoData, 
+            screenshot: screenshotName, 
+            status: 'active', 
+            analyzed_at: new Date().toISOString(),
+            history: limitedHistory
+        };
+
         // Update site with results, applying AI automation recommendations
         await client.query(
             "UPDATE sites SET seo_score = $1, scraped_data = COALESCE(scraped_data, '{}'::jsonb) || $2::jsonb WHERE id = $3",
             [
                 aiResult.seo_score || 0, 
-                JSON.stringify({ 
-                    ...aiResult, 
-                    automation: aiResult.automation_recommendations,
-                    learning_progress: 25,
-                    event_count: 0,
-                    raw_seo: seoData, 
-                    screenshot: screenshotName, 
-                    status: 'active', 
-                    analyzed_at: new Date().toISOString(),
-                    history: limitedHistory
-                }), 
+                JSON.stringify(finalData), 
                 siteId
             ]
         );
         console.log(`[Auto-Analysis] Completed for ${site.url}`);
+
+        // If userEmail provided, send the PDF report
+        if (userEmail) {
+            generateAndSendPDFReport(userEmail, finalData, site.url).catch(e => console.error("Email task failed:", e));
+        }
     } catch (err) {
         console.error(`[Auto-Analysis] Failed for Site ${siteId}:`, err);
         await client.query(
@@ -1553,22 +2162,201 @@ async function processSiteAnalysis(siteId) {
     }
 }
 
-// Background Worker: Every 1 minute, check for 'discovered' sites
+// Helper to calculate next run date with specific time
+function calculateNextRun(schedule, timeStr) {
+    if (!schedule || schedule === 'none') return null;
+    
+    const next = new Date();
+    if (timeStr) {
+        const [hours, minutes] = timeStr.split(':');
+        next.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+        
+        // If the scheduled time for today has already passed, move to the next interval
+        if (next <= new Date()) {
+            if (schedule === 'daily') next.setDate(next.getDate() + 1);
+            else if (schedule === 'weekly') next.setDate(next.getDate() + 7);
+            else if (schedule === 'monthly') next.setMonth(next.getMonth() + 1);
+        } else {
+            // Even if it hasn't passed, if it's weekly/monthly we still usually want the *next* interval 
+            // but for 'daily' we can run it today if the time is in the future.
+            // Let's stick to simple logic: if future and daily -> today. Otherwise -> next interval.
+            if (schedule === 'weekly') next.setDate(next.getDate() + 7);
+            else if (schedule === 'monthly') next.setMonth(next.getMonth() + 1);
+        }
+    } else {
+        // Fallback to legacy behavior if no time provided
+        if (schedule === 'daily') next.setDate(next.getDate() + 1);
+        else if (schedule === 'weekly') next.setDate(next.getDate() + 7);
+        else if (schedule === 'monthly') next.setMonth(next.getMonth() + 1);
+    }
+    return next.toISOString();
+}
+
+// Background Worker: Every 1 minute, check for 'discovered', 'queued', or 'scheduled' sites
 setInterval(async () => {
     const client = await pool.connect();
     try {
-        const res = await client.query(
-            "SELECT id FROM sites WHERE (scraped_data->>'status' = 'discovered') LIMIT 3"
+        const now = new Date().toISOString();
+        
+        // Priority 1: Specifically 'queued' sites (FIFO)
+        let res = await client.query(
+            "SELECT id FROM sites WHERE (scraped_data->>'status' = 'queued') ORDER BY created_at ASC LIMIT 2"
         );
+        
+        // Priority 2: If queue is empty, check for 'discovered' sites (initial scans)
+        if (res.rows.length === 0) {
+            res = await client.query(
+                "SELECT id FROM sites WHERE (scraped_data->>'status' = 'discovered') LIMIT 2"
+            );
+        }
+
+        // Priority 3: Check for scheduled runs whose time has come
+        if (res.rows.length === 0) {
+            res = await client.query(
+                "SELECT id FROM sites WHERE (scraped_data->>'next_run_at' <= $1) LIMIT 1",
+                [now]
+            );
+        }
+
         for (const row of res.rows) {
+            console.log(`[Worker] Auto-triggering analysis for Site ID: ${row.id}`);
             await processSiteAnalysis(row.id);
+            
+            // Handle rescheduling if it was a scheduled run
+            const siteRes = await client.query("SELECT scraped_data FROM sites WHERE id = $1", [row.id]);
+            const sd = siteRes.rows[0].scraped_data;
+            if (sd && sd.schedule && sd.schedule !== 'none') {
+                const nextRunAt = calculateNextRun(sd.schedule, sd.schedule_time);
+                await client.query(
+                    "UPDATE sites SET scraped_data = scraped_data || jsonb_build_object('next_run_at', $1) WHERE id = $2",
+                    [nextRunAt, row.id]
+                );
+            } else {
+                // Clear next_run_at if no schedule
+                await client.query(
+                    "UPDATE sites SET scraped_data = scraped_data - 'next_run_at' WHERE id = $1",
+                    [row.id]
+                );
+            }
         }
     } catch (e) {
-        console.error("[Worker] Error fetching discovered sites:", e);
+        console.error("[Worker] Error in background task:", e);
     } finally {
         client.release();
     }
 }, 60000);
+
+// Schedule & Batch Routes
+app.post('/api/sites/:id/schedule', isAuthenticated, async (req, res) => {
+    const { id } = req.params;
+    const { schedule, time } = req.body; // 'none', 'daily', 'weekly', 'monthly' + 'HH:mm'
+    
+    if (!['none', 'daily', 'weekly', 'monthly'].includes(schedule)) {
+        return res.status(400).json({ error: "Invalid schedule type" });
+    }
+
+    const client = await pool.connect();
+    try {
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized" });
+
+        const nextRunAt = calculateNextRun(schedule, time);
+
+        await client.query(
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || jsonb_build_object('schedule', $1::text, 'schedule_time', $2::text, 'next_run_at', $3::text) WHERE id = $4",
+            [schedule, time || '00:00', nextRunAt, id]
+        );
+        
+        res.json({ success: true, schedule, schedule_time: time, next_run_at: nextRunAt });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to update schedule" });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/organizations/:id/schedule', isAuthenticated, async (req, res) => {
+    let orgId = req.params.id;
+    const { schedule, time } = req.body;
+    
+    if (!['none', 'daily', 'weekly', 'monthly'].includes(schedule)) {
+        return res.status(400).json({ error: "Invalid schedule type" });
+    }
+
+    if (typeof orgId === 'string' && orgId.includes('-')) {
+        orgId = decodeOrgId(orgId);
+    }
+
+    const client = await pool.connect();
+    try {
+        const orgCheck = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [orgId, req.user.id]);
+        if (orgCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized" });
+
+        const nextRunAt = calculateNextRun(schedule, time);
+
+        // Update all active sites in this organization
+        await client.query(
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || jsonb_build_object('schedule', $1::text, 'schedule_time', $2::text, 'next_run_at', $3::text) WHERE organization_id = $4 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at')",
+            [schedule, time || '00:00', nextRunAt, orgId]
+        );
+
+        res.json({ success: true, message: `모든 사이트의 분석 주기가 '${schedule}' (시간: ${time || '00:00'})으로 설정되었습니다.` });
+    } catch (err) {
+        res.status(500).json({ error: "Batch schedule failed" });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/organizations/:id/batch-queue', isAuthenticated, async (req, res) => {
+    let orgId = req.params.id;
+    if (typeof orgId === 'string' && orgId.includes('-')) {
+        orgId = decodeOrgId(orgId);
+    }
+
+    const client = await pool.connect();
+    try {
+        const orgCheck = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [orgId, req.user.id]);
+        if (orgCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized" });
+
+        // Queue all active sites that are not already queued
+        await client.query(
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"queued\"}'::jsonb WHERE organization_id = $1 AND NOT (COALESCE(scraped_data, '{}'::jsonb) ? 'deleted_at')",
+            [orgId]
+        );
+
+        res.json({ success: true, message: "모든 사이트가 분석 대기 목록에 추가되었습니다." });
+    } catch (err) {
+        res.status(500).json({ error: "Batch analysis failed" });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/sites/:id/queue', isAuthenticated, async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    try {
+        const siteCheck = await client.query(
+            "SELECT s.id FROM sites s JOIN organizations o ON s.organization_id = o.id WHERE s.id = $1 AND o.owner_id = $2",
+            [id, req.user.id]
+        );
+        if (siteCheck.rows.length === 0) return res.status(403).json({ error: "Unauthorized" });
+
+        await client.query(
+            "UPDATE sites SET scraped_data = COALESCE(scraped_data, '{}'::jsonb) || '{\"status\": \"queued\"}'::jsonb WHERE id = $1",
+            [id]
+        );
+        res.json({ success: true, message: "분석 대기열에 추가되었습니다." });
+    } catch (err) {
+        res.status(500).json({ error: "Queue failed" });
+    } finally {
+        client.release();
+    }
+});
 
 app.post('/api/sites/:id/analyze', isAuthenticated, async (req, res) => {
     const { id } = req.params;
@@ -1585,18 +2373,13 @@ app.post('/api/sites/:id/analyze', isAuthenticated, async (req, res) => {
         
         const orgId = siteRes.rows[0].organization_id;
         const used = await getUsage(orgId);
-        
-        const plan = req.session.debug_plan || 'free';
-        let limit = 1;
-        if (plan === 'starter') limit = 10;
-        if (plan === 'pro') limit = 30;
-        
-        if (used >= limit) {
-            return res.status(403).json({ error: `오늘의 분석 한도(${limit}회)를 모두 사용하셨습니다. 내일 다시 시도하거나 플랜을 업그레이드해주세요.` });
-        }
+        const planInfo = getPlanDetails(req);
 
-        // Run analysis
-        await processSiteAnalysis(id);
+        if (used >= planInfo.limit) {
+            return res.status(403).json({ error: `오늘의 분석 한도(${planInfo.limit}회)를 모두 사용하셨습니다. 내일 다시 시도하거나 플랜을 업그레이드해주세요.` });
+        }
+        // Run analysis and send email to current user
+        await processSiteAnalysis(id, req.user.email);
         res.json({ success: true });
     } catch (err) {
         console.error(err);
@@ -1607,8 +2390,10 @@ app.post('/api/sites/:id/analyze', isAuthenticated, async (req, res) => {
 });
 
 app.post('/api/sites', isAuthenticated, async (req, res) => {
-    let { organization_id, url, skip_analysis } = req.body;
+    let { organization_id, url, skip_analysis, device } = req.body;
     if (!organization_id || !url) return res.status(400).json({ error: "Org ID and URL are required" });
+
+    const selectedDevice = ['desktop', 'mobile'].includes(device) ? device : 'desktop';
 
     // Try to decode if it looks like a public_id
     if (typeof organization_id === 'string' && organization_id.includes('-')) {
@@ -1617,11 +2402,16 @@ app.post('/api/sites', isAuthenticated, async (req, res) => {
         organization_id = decoded;
     }
 
-    // URL 정규화 (Origin만 추출하여 중복 방지)
-    let normalizedUrl = url;
+    // URL 정규화 (전체 URL을 보존하되, 중복 방지를 위해 trim 및 기본 정규화 수행)
+    let normalizedUrl = url.trim();
     try {
         const urlObj = new URL(url.startsWith('http') ? url : 'https://' + url);
-        normalizedUrl = urlObj.origin;
+        // origin + pathname + search (hash는 제외하는 것이 일반적)
+        normalizedUrl = urlObj.origin + urlObj.pathname + urlObj.search;
+        // 끝에 붙은 / 제거 (일관성)
+        if (normalizedUrl.endsWith('/') && urlObj.pathname === '/') {
+            normalizedUrl = normalizedUrl.slice(0, -1);
+        }
     } catch (e) {
         console.error("[API] Invalid URL provided:", url);
     }
@@ -1632,7 +2422,7 @@ app.post('/api/sites', isAuthenticated, async (req, res) => {
         const orgRes = await client.query("SELECT id FROM organizations WHERE id = $1 AND owner_id = $2", [organization_id, req.user.id]);
         if (orgRes.rows.length === 0) return res.status(403).json({ error: "Unauthorized access to this organization." });
 
-        // 기존에 등록된 사이트가 있는지 확인 (삭제되지 않은 것 중)
+        // 기존에 등록된 사이트가 있는지 확인 (삭제되지 않은 것 중) - URL + Device 조합으로 고유성 판단할 수도 있으나 우선 URL 기준
         const existingRes = await client.query(
             "SELECT id FROM sites WHERE organization_id = $1 AND url = $2 AND NOT (scraped_data ? 'deleted_at')",
             [organization_id, normalizedUrl]
@@ -1648,7 +2438,7 @@ app.post('/api/sites', isAuthenticated, async (req, res) => {
         const apiKey = crypto.randomBytes(16).toString('hex');
         const insertRes = await client.query(
             'INSERT INTO sites (organization_id, url, api_key, seo_score, scraped_data) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-            [organization_id, normalizedUrl, apiKey, 0, { status: 'registered', manual_added: true }]
+            [organization_id, normalizedUrl, apiKey, 0, { status: 'registered', manual_added: true, device: selectedDevice }]
         );
 
         // 비동기로 분석 시작 (skip_analysis가 아닐 때만)

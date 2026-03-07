@@ -85,10 +85,10 @@ function updateAutomationUI(site) {
                 if (log.type === 'form_submit') badgeClass = 'bg-danger';
                 
                 return `<tr>
-                    <td class="text-muted small">${time}</td>
-                    <td><span class="badge ${badgeClass} small">${log.type}</span></td>
-                    <td class="text-truncate" style="max-width: 150px;" title="${log.path}">${log.path}</td>
-                    <td class="small text-muted">${details}</td>
+                    <td class="ps-3 py-3 text-muted small" style="white-space: nowrap;">${time}</td>
+                    <td class="py-3"><span class="badge ${badgeClass} small bg-opacity-10 text-${badgeClass.replace('bg-', '')} border border-${badgeClass.replace('bg-', '')} border-opacity-25">${log.type.replace('_', ' ').toUpperCase()}</span></td>
+                    <td class="py-3 text-truncate" style="max-width: 150px;" title="${log.path}">${log.path}</td>
+                    <td class="pe-3 py-3 small text-muted">${details}</td>
                 </tr>`;
             }).join('');
         } else {
@@ -101,11 +101,9 @@ function updateAutomationUI(site) {
     if (aiToggle) {
         aiToggle.checked = config.ai_auto_optimize ?? false;
         
-        // Add listener for description toggle
+        // Add listener for auto-save
         if (!aiToggle.getAttribute('data-listener')) {
             aiToggle.addEventListener('change', (e) => {
-                const descEl = document.getElementById('aiAutoOptimizeDesc');
-                if (descEl) descEl.style.display = e.target.checked ? 'block' : 'none';
                 saveAutomation(true);
             });
             aiToggle.setAttribute('data-listener', 'true');
@@ -124,7 +122,7 @@ function updateAutomationUI(site) {
     const listContainer = document.getElementById('widgetListContainer');
     if (listContainer) {
         listContainer.innerHTML = WIDGETS.map(w => {
-            const isEnabled = config[w.id]?.enabled ?? true;
+            const isEnabled = config[w.id]?.enabled ?? false;
             return `
                 <div class="list-group-item list-group-item-action d-flex align-items-center p-3" style="cursor: pointer;" onclick="showAutomationDetail('${w.id}')">
                     <div class="bg-${w.color} text-white rounded-circle p-2 me-3 shadow-sm" style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;">
@@ -176,7 +174,7 @@ function renderWidgetDetail(widgetId, config) {
     document.getElementById('detailWidgetIcon').className = `bg-${w.color} text-white rounded-circle p-2 me-3 shadow-sm`;
     document.getElementById('detailWidgetIcon').innerHTML = `<i class="fas ${w.icon} fa-lg"></i>`;
     
-    const widgetConfig = config[widgetId] || { enabled: true };
+    const widgetConfig = config[widgetId] || { enabled: false };
     document.getElementById('detailWidgetToggle').checked = widgetConfig.enabled;
 
     const settingsCont = document.getElementById('widgetSettingsContainer');
