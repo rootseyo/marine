@@ -41,13 +41,11 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
     if (statusDiv) statusDiv.classList.remove('hidden');
     if (activeName) activeName.textContent = orgName;
 
-    // Update Global Badge (Top Right)
+    // Update Global Plan Badge (Top Right)
     const globalBadge = document.getElementById('activeOrgBadge');
-    const globalName = document.getElementById('activeOrgDisplay');
     const globalPlan = document.getElementById('activeOrgPlanBadge');
     
-    if (globalBadge && globalName) {
-        globalName.textContent = orgName;
+    if (globalBadge) {
         globalBadge.classList.remove('d-none');
         
         // Fetch and Update Plan Info

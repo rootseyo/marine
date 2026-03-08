@@ -7,6 +7,8 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
         :root { 
             --sidebar-width: 260px; 
@@ -115,8 +117,22 @@
             justify-content: center;
             flex-shrink: 0;
         }
+        #userAvatar {
+            width: 24px;
+            height: 24px;
+        }
 
+        .content-section { display: none; }
+        .content-section.active { display: block !important; }
         .hidden { display: none !important; }
+
+        /* Global Loader */
+        #globalLoader {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #fff; z-index: 9999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: opacity 0.5s ease;
+        }
         .extra-small { font-size: 0.75rem; }
         .alert-primary-soft { background-color: #eff6ff; color: #1e40af; border: 1px solid #dbeafe; }
         .text-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -182,6 +198,12 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
+    <!-- Global Loader -->
+    <div id="globalLoader">
+        <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+        <div class="fw-bold text-dark">시스템 최적화 중...</div>
+    </div>
+
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
         <button class="toggle-btn" onclick="toggleSidebar()"><i class="fas fa-chevron-left" id="toggleIcon"></i></button>
@@ -198,7 +220,7 @@
             
             <div class="user-section">
                 <div class="user-info-wrapper">
-                    <img id="userAvatar" src="" class="rounded-circle me-2" width="30">
+                    <img id="userAvatar" src="" class="rounded-circle me-2" width="24">
                     <span id="userName" class="small">Loading...</span>
                 </div>
                 <a href="/api/auth/logout" class="btn btn-outline-light btn-sm w-100 mt-2">
@@ -213,8 +235,7 @@
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h2 class="mb-0 fw-bold text-dark" id="sectionTitle">대시보드</h2>
             <div class="d-flex align-items-center">
-                <div id="activeOrgBadge" class="d-none me-3 d-flex align-items-center">
-                    <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 me-2" id="activeOrgDisplay">-</span>
+                <div id="activeOrgBadge" class="d-none me-2">
                     <span class="badge bg-dark text-white extra-small fw-normal" id="activeOrgPlanBadge">FREE</span>
                 </div>
                 <select class="form-select me-3 border-0 shadow-sm" style="width: 200px; border-radius: 10px;" id="orgSelect">
@@ -225,7 +246,7 @@
         </div>
 
         <!-- Section: Integrated Senior Dashboard -->
-        <div id="sectionDashboard" class="content-section">
+        <div id="sectionDashboard" class="content-section hidden">
             <div class="row g-4 mb-4">
                 <div class="col-md-3">
                     <div class="card p-3 shadow-sm border-0 h-100">
@@ -574,9 +595,13 @@
                             <p class="text-muted">AI가 페이지 구조와 SEO 상태를 정밀 분석하고 있습니다.<br>잠시만 기다려 주세요 (최대 30초 소요)</p>
                         </div>
                     </div>
+                </div>
+            </div>
 
-                    <!-- Step 3: Result (Injected by reports.js) -->
-                    <div class="hidden" id="step3Card">
+            <!-- Step 3: Result (Full Width & Centered) -->
+            <div class="hidden" id="step3Card">
+                <div class="row justify-content-center">
+                    <div class="col-lg-10 col-xl-9">
                         <div id="reportDetailContainer"></div>
                     </div>
                 </div>

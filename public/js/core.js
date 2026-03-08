@@ -68,19 +68,19 @@ function handleRouting() {
     
     console.log(`[Router] Navigating to: ${path}, Org: ${currentOrgId}`);
     
-    // Auth and Org Check
-    if (path !== '/organizations' && !currentOrgId) {
-        console.warn("[Router] No organization selected. Redirecting to /organizations");
-        navigateTo('/organizations');
-        return;
-    }
-
-    // Dynamic Route: /reports/:id
+    // Dynamic Route: /reports/:id (Check this first!)
     const reportMatch = path.match(/^\/reports\/([^\/]+)$/);
     if (reportMatch) {
         const siteId = reportMatch[1];
         showSection('sectionReport');
         if (typeof loadExistingReportData === 'function') loadExistingReportData(siteId);
+        return;
+    }
+
+    // Auth and Org Check: For other pages, ensure org is selected
+    if (path !== '/' && path !== '/organizations' && !currentOrgId) {
+        console.warn("[Router] No organization selected. Redirecting to /organizations");
+        navigateTo('/organizations');
         return;
     }
 
@@ -190,16 +190,25 @@ function showSection(sectionId) {
     }
 
     document.querySelectorAll('.content-section').forEach(sec => {
-        sec.classList.add('hidden');
+        sec.classList.remove('active');
     });
     const target = document.getElementById(sectionId);
-    if (target) target.classList.remove('hidden');
+    if (target) target.classList.add('active');
 
     if (sectionId === 'sectionReport' && !window.location.pathname.includes('/reports/')) {
-        document.getElementById('step2Card').classList.remove('hidden');
+        document.getElementById('step2Card').classList.add('hidden');
         document.getElementById('step3Card').classList.add('hidden');
-        const historyCard = document.querySelector('#sectionReport .card.mb-4');
+        
+        // Ensure main view is visible
+        const mainRow = document.querySelector('#sectionReport > .row:first-child');
+        if (mainRow) mainRow.classList.remove('hidden');
+        
+        const step1 = document.getElementById('step1Card');
+        if (step1) step1.classList.remove('hidden');
+
+        const historyCard = document.getElementById('reportHistoryCard');
         if (historyCard) historyCard.classList.remove('hidden');
+        
         const searchInput = document.getElementById('historySearchInput');
         if (searchInput) searchInput.value = '';
     }
@@ -226,6 +235,13 @@ function showSection(sectionId) {
         if (routes[link.getAttribute('href')] === sectionId) link.classList.add('active');
         else link.classList.remove('active');
     });
+
+    // Hide Global Loader
+    const loader = document.getElementById('globalLoader');
+    if (loader) {
+        loader.style.opacity = '0';
+        setTimeout(() => loader.style.display = 'none', 500);
+    }
 }
 
 // Global Usage / Plan Logic
@@ -236,7 +252,7 @@ async function loadUsage() {
         const res = await fetch(`/api/usage?organization_id=${orgParam}`);
         const data = await res.json();
         
-        const remaining = data.limit - data.used;
+        const remaining = Math.max(0, data.limit - data.used);
         const display = document.getElementById('remainingCount');
         const limitDisplay = document.getElementById('limitCount');
         const planDisplay = document.getElementById('planLabel');

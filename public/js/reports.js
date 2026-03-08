@@ -58,8 +58,7 @@ function renderReportHistory() {
         }
 
         tr.innerHTML = `
-            <td onclick="event.stopPropagation()"><input type="checkbox" class="site-check" value="${site.id}"></td>
-            <td>
+            <td class="ps-4">
                 ${deviceIcon}
                 <span class="text-primary fw-bold">${cleanUrl}</span>
                 ${historyCount > 1 ? `<span class="badge rounded-pill bg-light text-dark border ms-1" title="분석 히스토리">v${historyCount}</span>` : ''}
@@ -71,9 +70,9 @@ function renderReportHistory() {
                 ${scheduleBadge}
             </td>
             <td><span class="badge ${site.seo_score > 70 ? 'bg-success' : (site.seo_score > 0 ? 'bg-warning' : 'bg-light text-dark')}">${site.seo_score > 0 ? site.seo_score + '점' : '--'}</span></td>
-            <td class="text-muted small">${new Date(site.created_at).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
-            <td>
-                <div class="d-flex gap-1">
+            <td class="text-center text-muted small">${new Date(site.created_at).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+            <td class="pe-4">
+                <div class="d-flex justify-content-end gap-1">
                     <button class="btn btn-xs ${isQueued ? 'btn-secondary' : 'btn-primary'}" onclick="event.stopPropagation(); reAnalyzeSite('${site.id}')" title="즉시 분석 실행" ${isQueued ? 'disabled' : ''}>
                         <i class="fas ${isQueued ? 'fa-hourglass-half' : 'fa-play'} me-1"></i> 분석
                     </button>
@@ -238,6 +237,68 @@ async function triggerAnalysis(siteId) {
     return await res.json();
 }
 
+async function analyzeSite() {
+    const urlInput = document.getElementById('siteUrlInput');
+    let url = urlInput.value.trim();
+    if (!url) return alert("분석할 사이트 URL을 입력하세요.");
+    if (!currentOrgId) return alert("조직을 먼저 선택해주세요.");
+
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+    }
+
+    const step1 = document.getElementById('step1Card');
+    const step2 = document.getElementById('step2Card');
+    const btn = document.getElementById('btnAnalyzeSite');
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> 요청 중...';
+
+    try {
+        const res = await fetch('/api/sites', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ organization_id: currentOrgId, url: url })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            urlInput.value = '';
+            if (step1) step1.classList.add('hidden');
+            if (step2) step2.classList.remove('hidden');
+
+            const analysisRes = await triggerAnalysis(data.site.id);
+            
+            // Polling for completion
+            const pollInterval = setInterval(async () => {
+                try {
+                    const statusRes = await fetch(`/api/sites/detail/${data.site.id}`);
+                    const statusData = await statusRes.json();
+                    if (statusData.site && statusData.site.scraped_data?.status === 'active') {
+                        clearInterval(pollInterval);
+                        if (step1) step1.classList.remove('hidden');
+                        if (step2) step2.classList.add('hidden');
+                        loadReportHistory();
+                        loadUsage();
+                        viewExistingReport(data.site.id);
+                    }
+                } catch (e) {
+                    clearInterval(pollInterval);
+                }
+            }, 5000);
+
+        } else {
+            alert(data.error || "사이트 등록 실패");
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-search me-1"></i> 데이터 수집 및 분석 시작';
+        }
+    } catch (err) {
+        alert("서버 오류가 발생했습니다.");
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-search me-1"></i> 데이터 수집 및 분석 시작';
+    }
+}
+
 async function registerOnlySite() {
     const urlInput = document.getElementById('siteUrl');
     const deviceSelect = document.getElementById('siteDevice');
@@ -337,13 +398,112 @@ function switchReportVersion(index) {
 
 function renderAnalysisResult(siteData, scriptTag, url) {
     const card = document.getElementById('step3Card');
-    if (!card) return;
+    const container = document.getElementById('reportDetailContainer');
+    if (!card || !container) return;
     
+    // Inject Structure
+    container.innerHTML = `
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h6 class="mb-0 fw-bold"><i class="fas fa-file-alt me-2 text-primary"></i> 분석 리포트: <span id="analyzedUrlDisplay"></span></h6>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="navigateTo('/reports')"><i class="fas fa-chevron-left me-1"></i> 뒤로가기</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="downloadPDF()"><i class="fas fa-download me-1"></i> PDF</button>
+                    <button class="btn btn-sm btn-primary" onclick="emailPDF()"><i class="fas fa-envelope me-1"></i> 메일 발송</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row g-4">
+                    <div class="col-md-4 text-center border-end">
+                        <div style="width: 150px; height: 150px; margin: 0 auto 20px;" class="position-relative">
+                            <canvas id="scoreChart"></canvas>
+                            <div class="position-absolute top-50 start-50 translate-middle text-center">
+                                <h2 class="fw-bold mb-0" id="seoScoreDisplay">0</h2>
+                                <div class="extra-small text-muted">SEO SCORE</div>
+                            </div>
+                        </div>
+                        <div id="screenshotContainer" class="bg-light rounded p-2 mb-3">
+                            <img id="siteScreenshot" src="" class="img-fluid rounded shadow-sm" style="max-height: 200px; display:none;" onerror="this.style.display='none'; document.getElementById('screenshotPlaceholder').style.display='block';">
+                            <div id="screenshotPlaceholder" class="py-5 text-muted small"><i class="fas fa-image fa-2x mb-2"></i><br>이미지 준비 중</div>
+                        </div>
+                    </div>
+                    <div class="col-md-8">
+                        <h5 class="fw-bold mb-3">종합 분석 요약</h5>
+                        <p class="text-muted small mb-4" id="siteSummary">--</p>
+                        
+                        <div id="ceoMessageContainer" class="alert alert-primary border-0 bg-opacity-10 text-primary mb-4" style="display:none;">
+                            <h6 class="fw-bold small"><i class="fas fa-comment-dots me-2"></i> AI 전략 제언</h6>
+                            <p class="mb-0 small" id="ceoMessage"></p>
+                        </div>
+
+                        <div class="mb-4">
+                            <h6 class="fw-bold small mb-2">감지된 주요 제품/키워드</h6>
+                            <div id="detectedProducts" class="d-flex flex-wrap gap-2"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="my-4 opacity-5">
+
+                <div class="row g-4">
+                    <div class="col-md-6">
+                        <h6 class="fw-bold mb-3"><i class="fas fa-lightbulb text-warning me-2"></i> 분야별 개선 제안</h6>
+                        <div class="list-group list-group-flush small">
+                            <div class="list-group-item px-0 py-2 border-0"><strong>메타 데이터:</strong> <span id="adviceMeta" class="text-muted"></span></div>
+                            <div class="list-group-item px-0 py-2 border-0"><strong>시맨틱 구조:</strong> <span id="adviceSemantics" class="text-muted"></span></div>
+                            <div class="list-group-item px-0 py-2 border-0"><strong>이미지 최적화:</strong> <span id="adviceImages" class="text-muted"></span></div>
+                            <div class="list-group-item px-0 py-2 border-0"><strong>링크 구조:</strong> <span id="adviceLinks" class="text-muted"></span></div>
+                            <div class="list-group-item px-0 py-2 border-0"><strong>스키마 데이터:</strong> <span id="adviceSchemas" class="text-muted"></span></div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="fw-bold mb-3"><i class="fas fa-robot text-primary me-2"></i> AI 엔진 가시성 (AIO)</h6>
+                        <div class="bg-light rounded p-3">
+                            <div class="d-flex justify-content-between mb-2">
+                                <span class="small">검색 엔진 인지 점수</span>
+                                <span class="badge bg-primary" id="aiScore">0</span>
+                            </div>
+                            <div class="extra-small text-muted mb-3">ChatGPT, Perplexity, Gemini 등 생성형 AI 검색 노출 준비도</div>
+                            <div class="small mb-1"><strong>ChatGPT:</strong> <span id="chatgptStatus"></span></div>
+                            <div class="small mb-1"><strong>Perplexity:</strong> <span id="perplexityStatus"></span></div>
+                            <div class="small mb-1"><strong>Gemini:</strong> <span id="geminiStatus"></span></div>
+                            <div class="mt-2 p-2 bg-white rounded extra-small border">
+                                <strong>Tip:</strong> <span id="aiTip"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4" id="sampleCodeContainer" style="display:none;">
+                    <h6 class="fw-bold small mb-2"><i class="fas fa-code me-2"></i> 추천 최적화 코드</h6>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="extra-small text-muted mb-1">SEO 메타 태그</div>
+                            <pre class="bg-dark text-white p-2 rounded extra-small"><code id="seoSampleCode" class="language-html"></code></pre>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="extra-small text-muted mb-1">JSON-LD 스키마</div>
+                            <pre class="bg-dark text-white p-2 rounded extra-small"><code id="geoSampleCode" class="language-json"></code></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <h6 class="fw-bold small mb-2"><i class="fas fa-terminal me-2"></i> 통합 SDK 설치 코드</h6>
+                    <div class="code-block p-3 bg-dark rounded position-relative">
+                        <button class="btn btn-xs btn-outline-light position-absolute top-0 end-0 m-2" onclick="copyText('scriptTagCode')">Copy</button>
+                        <pre class="m-0 text-info extra-small"><code id="scriptTagCode" class="language-html"></code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
     const section = document.getElementById('sectionReport');
     if (section) {
-        section.querySelectorAll('.card').forEach(c => {
-            if (c.id !== 'step3Card') c.classList.add('hidden');
-        });
+        // Hide only the row that contains step1/step2 to make room for step3
+        const mainRow = section.querySelector('.row:first-child');
+        if (mainRow) mainRow.classList.add('hidden');
     }
 
     if (url) {
@@ -353,19 +513,20 @@ function renderAnalysisResult(siteData, scriptTag, url) {
     if (siteData.screenshot) {
         const img = document.getElementById('siteScreenshot');
         const placeholder = document.getElementById('screenshotPlaceholder');
-        img.src = "/screenshots/" + siteData.screenshot;
-        img.style.display = 'inline-block';
-        placeholder.style.display = 'none';
-    } else {
-        const img = document.getElementById('siteScreenshot');
-        const placeholder = document.getElementById('screenshotPlaceholder');
-        if (img) img.style.display = 'none';
-        if (placeholder) placeholder.style.display = 'block';
+        if (img) {
+            img.src = "/screenshots/" + siteData.screenshot;
+            img.style.display = 'inline-block';
+        }
+        if (placeholder) placeholder.style.display = 'none';
     }
 
-    document.getElementById('seoScoreDisplay').textContent = siteData.seo_score || 0;
-    renderScoreChart(siteData.seo_score || 0);
-    document.getElementById('siteSummary').textContent = siteData.summary || "--";
+    const aiRes = siteData.ai_analysis || {};
+    const finalScore = siteData.seo_score || aiRes.seo_score || 0;
+    const finalSummary = siteData.summary || aiRes.summary || "--";
+
+    document.getElementById('seoScoreDisplay').textContent = finalScore;
+    renderScoreChart(finalScore);
+    document.getElementById('siteSummary').textContent = finalSummary;
     
     const prodContainer = document.getElementById('detectedProducts');
     if (prodContainer) {
@@ -382,39 +543,57 @@ function renderAnalysisResult(siteData, scriptTag, url) {
     if (analysisOpinion) {
         document.getElementById('ceoMessage').textContent = analysisOpinion;
         document.getElementById('ceoMessageContainer').style.display = 'block';
-    } else {
-        document.getElementById('ceoMessageContainer').style.display = 'none';
     }
 
-    const advice = siteData.advice || {};
-    document.getElementById('adviceMeta').textContent = advice.meta || "--";
-    document.getElementById('adviceSemantics').textContent = advice.semantics || "--";
-    document.getElementById('adviceImages').textContent = advice.images || "--";
-    document.getElementById('adviceLinks').textContent = advice.links || "--";
-    document.getElementById('adviceSchemas').textContent = advice.schemas || "--";
+    const advice = siteData.advice || siteData.seo_details || {};
+    const formatAdvice = (val) => {
+        if (!val) return "--";
+        if (typeof val === 'string') return val;
+        if (typeof val === 'object') {
+            // Special handling for common structures
+            if (val.description) return val.description;
+            if (val.title) return val.title;
+            if (val.texts && Array.isArray(val.texts)) return val.texts.join(", ");
+            return JSON.stringify(val).substring(0, 150) + "...";
+        }
+        return "--";
+    };
 
-    const aio = siteData.ai_visibility || {};
-    document.getElementById('aiScore').textContent = aio.score || 0;
-    document.getElementById('chatgptStatus').textContent = aio.chatgpt_readiness || "--";
-    document.getElementById('perplexityStatus').textContent = aio.perplexity_readiness || "--";
-    document.getElementById('geminiStatus').textContent = aio.gemini_readiness || "--";
-    document.getElementById('aiTip').textContent = aio.improvement_tip || "--";
+    if (document.getElementById('adviceMeta')) document.getElementById('adviceMeta').textContent = formatAdvice(advice.meta);
+    if (document.getElementById('adviceSemantics')) document.getElementById('adviceSemantics').textContent = formatAdvice(advice.semantics);
+    if (document.getElementById('adviceImages')) document.getElementById('adviceImages').textContent = formatAdvice(advice.images);
+    if (document.getElementById('adviceLinks')) document.getElementById('adviceLinks').textContent = formatAdvice(advice.links);
+    if (document.getElementById('adviceSchemas')) document.getElementById('adviceSchemas').textContent = formatAdvice(advice.schemas);
 
-    document.getElementById('scriptTagCode').textContent = scriptTag || "";
-    if (window.hljs) hljs.highlightElement(document.getElementById('scriptTagCode'));
+    const aio = siteData.ai_visibility || aiRes.ai_visibility || {};
+    if (document.getElementById('aiScore')) document.getElementById('aiScore').textContent = aio.score || aiRes.seo_score || 0;
+    if (document.getElementById('chatgptStatus')) document.getElementById('chatgptStatus').textContent = aio.chatgpt_readiness || "--";
+    if (document.getElementById('perplexityStatus')) document.getElementById('perplexityStatus').textContent = aio.perplexity_readiness || "--";
+    if (document.getElementById('geminiStatus')) document.getElementById('geminiStatus').textContent = aio.gemini_readiness || "--";
+    if (document.getElementById('aiTip')) document.getElementById('aiTip').textContent = aio.improvement_tip || "--";
+
+    const cleanCode = (code) => {
+        if (!code) return "";
+        return code.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+    };
+
+    if (document.getElementById('scriptTagCode')) {
+        document.getElementById('scriptTagCode').textContent = scriptTag || "";
+        if (window.hljs) hljs.highlightElement(document.getElementById('scriptTagCode'));
+    }
 
     if (siteData.sample_codes) {
         const seoEl = document.getElementById('seoSampleCode');
         const geoEl = document.getElementById('geoSampleCode');
-        seoEl.textContent = siteData.sample_codes.seo || "";
-        geoEl.textContent = siteData.sample_codes.geo || "";
-        if (window.hljs) {
-            hljs.highlightElement(seoEl);
-            hljs.highlightElement(geoEl);
+        if (seoEl) {
+            seoEl.textContent = cleanCode(siteData.sample_codes.seo);
+            if (window.hljs) hljs.highlightElement(seoEl);
         }
-        document.getElementById('sampleCodeContainer').style.display = 'block';
-    } else {
-        document.getElementById('sampleCodeContainer').style.display = 'none';
+        if (geoEl) {
+            geoEl.textContent = cleanCode(siteData.sample_codes.geo);
+            if (window.hljs) hljs.highlightElement(geoEl);
+        }
+        if (document.getElementById('sampleCodeContainer')) document.getElementById('sampleCodeContainer').style.display = 'block';
     }
 
     card.classList.remove('hidden');
