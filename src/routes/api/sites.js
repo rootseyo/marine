@@ -148,13 +148,29 @@ router.post('/', isAuthenticated, async (req, res) => {
     let { organization_id, url, device, skip_analysis } = req.body;
     if (organization_id && organization_id.includes('-')) organization_id = decodeOrgId(organization_id);
 
+    // Precise URL Normalization
+    let finalUrl = url.trim();
+    if (!finalUrl.startsWith('http')) {
+        finalUrl = 'https://' + finalUrl;
+    }
+    
+    // Clean trailing slash if it's just the root domain, but keep it if there are params
+    try {
+        const u = new URL(finalUrl);
+        if (u.pathname === '/' && !u.search) {
+            finalUrl = u.origin;
+        } else {
+            finalUrl = u.href;
+        }
+    } catch (e) {}
+
     const client = await db.connect();
     try {
         const crypto = require('crypto');
         const apiKey = crypto.randomBytes(16).toString('hex');
         const result = await client.query(
             'INSERT INTO sites (organization_id, url, api_key, seo_score, scraped_data) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-            [organization_id, url, apiKey, 0, { status: 'registered', device: device || 'desktop' }]
+            [organization_id, finalUrl, apiKey, 0, { status: 'registered', device: device || 'desktop' }]
         );
         
         const newSite = result.rows[0];

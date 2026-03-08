@@ -156,14 +156,42 @@ async function triggerOrgSelection(orgId, orgName, publicId) {
                 : 'https://app.brightnetworks.kr';
                 
             html += `
-                <div class="mb-5">
-                    <div class="code-block">
-                        <button class="copy-btn" onclick="copyText('script_universal')">Copy</button>
-                        <pre class="m-0"><code id="script_universal" class="language-html">&lt;script src="${sdkHost}/sdk.js?key=${displayId}" async&gt;&lt;/script&gt;</code></pre>
+                <div class="card border-0 shadow-sm mb-5 overflow-hidden" style="border-radius: 16px;">
+                    <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold"><i class="fas fa-code me-2 text-primary"></i> 통합 분석 SDK 설치 가이드</h6>
+                        <span class="badge bg-primary bg-opacity-10 text-primary extra-small fw-normal">Universal SDK</span>
                     </div>
-                    <p class="text-muted small mt-2 mb-0">
-                        <i class="fas fa-info-circle me-1"></i> 모든 페이지의 <code>&lt;head&gt;</code> 영역에 위 스크립트를 삽입해 주세요.
-                    </p>
+                    <div class="card-body bg-light bg-opacity-50 p-4">
+                        <div class="d-flex mb-4">
+                            <div class="me-3">
+                                <span class="badge bg-primary rounded-circle d-flex align-items-center justify-content-center" style="width: 24px; height: 24px;">1</span>
+                            </div>
+                            <div>
+                                <h6 class="fw-bold mb-1 small">스크립트 복사</h6>
+                                <p class="text-muted extra-small mb-3">아래의 고유 설치 스크립트를 복사하여 사이트의 모든 페이지에 적용하세요.</p>
+                                
+                                <div class="code-block position-relative shadow-sm" style="margin-top: 0; background: #1e293b; border-radius: 12px; padding: 25px;">
+                                    <button class="btn btn-xs btn-primary position-absolute top-0 end-0 m-3 shadow-sm" onclick="copyText('script_universal')" style="z-index: 10;">
+                                        <i class="fas fa-copy me-1"></i> Copy
+                                    </button>
+                                    <pre class="m-0"><code id="script_universal" class="language-html" style="font-family: 'Fira Code', monospace; font-size: 0.95rem; color: #38bdf8;">&lt;script src="${sdkHost}/sdk.js?key=${displayId}" async&gt;&lt;/script&gt;</code></pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="d-flex">
+                            <div class="me-3">
+                                <span class="badge bg-primary rounded-circle d-flex align-items-center justify-content-center" style="width: 24px; height: 24px;">2</span>
+                            </div>
+                            <div>
+                                <h6 class="fw-bold mb-1 small">설치 위치 확인</h6>
+                                <p class="text-muted extra-small mb-0">
+                                    복사한 코드를 사이트의 <code>&lt;head&gt;</code> 태그 내부에 붙여넣으세요. 
+                                    <span class="text-primary fw-bold ms-1">정상적으로 설치되면 실시간 유저 행동 데이터가 자동으로 수집됩니다.</span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             `;
 

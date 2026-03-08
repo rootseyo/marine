@@ -39,12 +39,13 @@ function renderReportHistory() {
         const status = site.scraped_data?.status;
         const isAnalyzed = status === 'active';
         const isQueued = status === 'queued';
+        const isProcessing = status === 'processing' || status === 'registered';
         const historyCount = (site.scraped_data?.history?.length || 0) + (isAnalyzed ? 1 : 0);
         
         tr.onclick = () => {
             if (isAnalyzed) viewExistingReport(site.id);
         };
-        const cleanUrl = site.url.replace(/^https?:\/\//, '');
+        const displayUrl = site.url; // Show full URL
         const device = site.scraped_data?.device || 'desktop';
         const deviceIcon = device === 'mobile' ? '<i class="fas fa-mobile-alt me-1 text-muted" title="Mobile View"></i>' : '<i class="fas fa-desktop me-1 text-muted" title="Desktop View"></i>';
         
@@ -57,24 +58,36 @@ function renderReportHistory() {
             scheduleBadge = `<div class="mt-1"><span class="badge bg-light text-dark border extra-small" title="다음 예정일: ${nextRun}"><i class="fas fa-calendar-check me-1"></i>${schedule.toUpperCase()} @ ${time}</span></div>`;
         }
 
+        // Status Badge Logic
+        let statusHtml = '';
+        if (isAnalyzed) {
+            statusHtml = '<span class="badge bg-success">분석 완료</span>';
+        } else if (isQueued) {
+            statusHtml = '<span class="badge bg-info"><i class="fas fa-hourglass-half me-1"></i>분석 대기 중</span>';
+        } else if (isProcessing) {
+            statusHtml = '<span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25"><span class="spinner-border spinner-border-sm me-1" style="width:10px; height:10px;"></span>분석 중...</span>';
+        } else if (status === 'error') {
+            statusHtml = '<span class="badge bg-danger">오류</span>';
+        } else {
+            statusHtml = '<span class="badge bg-secondary">대기 중</span>';
+        }
+
         tr.innerHTML = `
             <td class="ps-4">
                 ${deviceIcon}
-                <span class="text-primary fw-bold">${cleanUrl}</span>
+                <span class="text-primary fw-bold">${displayUrl}</span>
                 ${historyCount > 1 ? `<span class="badge rounded-pill bg-light text-dark border ms-1" title="분석 히스토리">v${historyCount}</span>` : ''}
             </td>
             <td>
-                <span class="badge ${isAnalyzed ? 'bg-success' : (isQueued ? 'bg-info' : (status === 'error' ? 'bg-danger' : 'bg-secondary'))}">
-                    ${isAnalyzed ? '분석 완료' : (isQueued ? '분석 대기 중' : (status === 'error' ? '오류' : '대기 중'))}
-                </span>
+                ${statusHtml}
                 ${scheduleBadge}
             </td>
-            <td><span class="badge ${site.seo_score > 70 ? 'bg-success' : (site.seo_score > 0 ? 'bg-warning' : 'bg-light text-dark')}">${site.seo_score > 0 ? site.seo_score + '점' : '--'}</span></td>
+            <td><span class="badge ${isAnalyzed && site.seo_score > 70 ? 'bg-success' : (isAnalyzed && site.seo_score > 0 ? 'bg-warning' : 'bg-light text-dark')}">${isAnalyzed ? site.seo_score + '점' : '--'}</span></td>
             <td class="text-center text-muted small">${new Date(site.created_at).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
             <td class="pe-4">
                 <div class="d-flex justify-content-end gap-1">
-                    <button class="btn btn-xs ${isQueued ? 'btn-secondary' : 'btn-primary'}" onclick="event.stopPropagation(); reAnalyzeSite('${site.id}')" title="즉시 분석 실행" ${isQueued ? 'disabled' : ''}>
-                        <i class="fas ${isQueued ? 'fa-hourglass-half' : 'fa-play'} me-1"></i> 분석
+                    <button class="btn btn-xs ${isQueued || isProcessing ? 'btn-secondary' : 'btn-primary'}" onclick="event.stopPropagation(); reAnalyzeSite('${site.id}')" title="즉시 분석 실행" ${isQueued || isProcessing ? 'disabled' : ''}>
+                        <i class="fas ${isQueued || isProcessing ? 'fa-hourglass-half' : 'fa-play'} me-1"></i> 분석
                     </button>
                     <button class="btn btn-xs btn-outline-secondary" onclick="event.stopPropagation(); openScheduleModal('${site.id}', '${schedule}', '${site.scraped_data?.schedule_time || '03:00'}')" title="스케줄 설정">
                         <i class="fas fa-clock"></i>
@@ -264,6 +277,10 @@ async function analyzeSite() {
 
         if (data.success) {
             urlInput.value = '';
+            
+            // Show item in history immediately as 'Analyzing'
+            loadReportHistory();
+
             if (step1) step1.classList.add('hidden');
             if (step2) step2.classList.remove('hidden');
 
@@ -526,7 +543,14 @@ function renderAnalysisResult(siteData, scriptTag, url) {
 
     document.getElementById('seoScoreDisplay').textContent = finalScore;
     renderScoreChart(finalScore);
-    document.getElementById('siteSummary').textContent = finalSummary;
+    
+    // Semantic Rendering via marked.js
+    const renderMarkdown = (text) => {
+        if (!text || text === "--") return "--";
+        try { return marked.parse(text); } catch (e) { return text; }
+    };
+
+    document.getElementById('siteSummary').innerHTML = renderMarkdown(finalSummary);
     
     const prodContainer = document.getElementById('detectedProducts');
     if (prodContainer) {
@@ -541,29 +565,28 @@ function renderAnalysisResult(siteData, scriptTag, url) {
 
     const analysisOpinion = siteData.ceo_message || siteData.analysis_opinion; 
     if (analysisOpinion) {
-        document.getElementById('ceoMessage').textContent = analysisOpinion;
+        document.getElementById('ceoMessage').innerHTML = renderMarkdown(analysisOpinion);
         document.getElementById('ceoMessageContainer').style.display = 'block';
     }
 
     const advice = siteData.advice || siteData.seo_details || {};
     const formatAdvice = (val) => {
         if (!val) return "--";
-        if (typeof val === 'string') return val;
+        if (typeof val === 'string') return renderMarkdown(val);
         if (typeof val === 'object') {
-            // Special handling for common structures
-            if (val.description) return val.description;
-            if (val.title) return val.title;
-            if (val.texts && Array.isArray(val.texts)) return val.texts.join(", ");
+            if (val.description) return renderMarkdown(val.description);
+            if (val.title) return renderMarkdown(val.title);
+            if (val.texts && Array.isArray(val.texts)) return renderMarkdown(val.texts.join(", "));
             return JSON.stringify(val).substring(0, 150) + "...";
         }
         return "--";
     };
 
-    if (document.getElementById('adviceMeta')) document.getElementById('adviceMeta').textContent = formatAdvice(advice.meta);
-    if (document.getElementById('adviceSemantics')) document.getElementById('adviceSemantics').textContent = formatAdvice(advice.semantics);
-    if (document.getElementById('adviceImages')) document.getElementById('adviceImages').textContent = formatAdvice(advice.images);
-    if (document.getElementById('adviceLinks')) document.getElementById('adviceLinks').textContent = formatAdvice(advice.links);
-    if (document.getElementById('adviceSchemas')) document.getElementById('adviceSchemas').textContent = formatAdvice(advice.schemas);
+    if (document.getElementById('adviceMeta')) document.getElementById('adviceMeta').innerHTML = formatAdvice(advice.meta);
+    if (document.getElementById('adviceSemantics')) document.getElementById('adviceSemantics').innerHTML = formatAdvice(advice.semantics);
+    if (document.getElementById('adviceImages')) document.getElementById('adviceImages').innerHTML = formatAdvice(advice.images);
+    if (document.getElementById('adviceLinks')) document.getElementById('adviceLinks').innerHTML = formatAdvice(advice.links);
+    if (document.getElementById('adviceSchemas')) document.getElementById('adviceSchemas').innerHTML = formatAdvice(advice.schemas);
 
     const aio = siteData.ai_visibility || aiRes.ai_visibility || {};
     if (document.getElementById('aiScore')) document.getElementById('aiScore').textContent = aio.score || aiRes.seo_score || 0;
